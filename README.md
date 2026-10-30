@@ -119,6 +119,15 @@ add an engine and point it at `kiwa.bat` (or `node uci.js` with this folder as
 the working directory). Kiwa speaks standard UCI: `uci`, `isready`, `position`,
 `go` with `movetime`/`depth`/clock fields, `bestmove`, plus `info` lines.
 
+There are two valid engine files:
+
+- `kiwa.bat` — the full engine. It starts Node, which adds the opening book and
+  prediction mode around the native search. Use this one for normal play.
+- `native/kiwa-native.exe` — the search core on its own. It is a complete UCI
+  engine and needs no Node, so a GUI can import it directly, but it does not
+  read `book.js` and therefore plays no book lines. This is the file attached
+  to the GitHub release; useful for engine testing or machines without Node.
+
 **Lichess — officially supported, but as a bot account.** Lichess has no
 "upload an engine" button and the web analysis board cannot load a local engine.
 What works is their bot API. A ready setup lives in `../lichess-bot/`
