@@ -1,0 +1,52 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: mingw-w64-ucrt-x86_64-gcc
+
+      - name: Build native engine
+        shell: msys2 {0}
+        run: |
+          cd native
+          g++ -O3 -std=c++17 -static -o kiwa-native.exe kiwa.cpp
+          ls -l kiwa-native.exe
+
+      - name: Perft smoke test
+        shell: msys2 {0}
+        run: |
+          out=$(native/kiwa-native.exe perft 4)
+          echo "$out"
+          echo "$out" | grep -q 197281
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kiwa-windows-x64
+          path: native/kiwa-native.exe
+
+      - name: Attach binary to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --title "Kiwa ${GITHUB_REF_NAME#v}" \
+              --notes "Windows x64 build, portable (no CPU-specific instructions)."
+          gh release upload "$GITHUB_REF_NAME" native/kiwa-native.exe --clobber

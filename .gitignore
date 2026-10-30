@@ -1,0 +1,5 @@
+node_modules/
+*.log
+# Built binaries: releases and CI artifacts carry them, not git history.
+dist/
+native/kiwa-native.exe
