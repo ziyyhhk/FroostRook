@@ -60,6 +60,16 @@ function positionCommand() {
   return posBase + (posMoves.length ? ' moves ' + posMoves.join(' ') : '');
 }
 
+function handleSetOption(tokens) {
+  const rest = tokens.slice(1).join(' ');
+  const m = rest.match(/^name\s+(.+?)(?:\s+value\s+(.+))?$/i);
+  if (!m) return;
+  const name = m[1].trim();
+  const value = m[2] ? m[2].trim() : '';
+  if (name.toLowerCase() === 'clear hash') engine.clearTT();
+  if (native.available()) native.setOption(name, value);
+}
+
 function handleGo(tokens) {
   const opts = {};
   for (let i = 1; i < tokens.length; i++) {
@@ -131,10 +141,16 @@ rl.on('line', line => {
 
   switch (cmd) {
     case 'uci':
-      process.stdout.write('id name Kiwa 2.0\n');
+      process.stdout.write('id name Kiwa 2.0.1\n');
       process.stdout.write('id author Kiwa\n');
       process.stdout.write(`id string core ${native.available() ? 'C++ native' : 'JavaScript (fallback)'}\n`);
+      process.stdout.write('option name Hash type spin default 64 min 1 max 512\n');
+      process.stdout.write('option name Clear Hash type button\n');
+      process.stdout.write('option name Move Overhead type spin default 30 min 0 max 1000\n');
       process.stdout.write('uciok\n');
+      break;
+    case 'setoption':
+      handleSetOption(tokens);
       break;
     case 'isready':
       process.stdout.write('readyok\n');

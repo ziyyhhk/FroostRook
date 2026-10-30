@@ -122,6 +122,12 @@ class NativeEngine {
     });
   }
 
+  /** Forward a UCI option to the native core (starts it if needed). */
+  setOption(name, value) {
+    const cmd = 'setoption name ' + name + (value === '' || value === undefined ? '' : ' value ' + value);
+    this.send(cmd);
+  }
+
   stop() {
     if (this.proc) this.send('stop');
   }

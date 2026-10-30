@@ -1,4 +1,4 @@
-# Kiwa 2.0
+# Kiwa 2.0.1
 
 <img src="assets/kiwa.png" alt="Kiwa" width="220" align="right">
 
@@ -41,6 +41,15 @@ locates `book.js` and `native/` relative to its own path).
 In terminal play mode, type moves in UCI notation (`e2e4`, `e7e8q` for
 promotion). Commands: `hint`, `predict`, `moves`, `undo`, `new`, `depth N`,
 `quit`. After each reply Kiwa prints its top three guesses for your next move.
+
+## What changed in 2.0.1
+
+| Change | Evidence |
+|---|---|
+| Real UCI options | `Hash` (resizable transposition table), `Clear Hash` button, `Move Overhead` spin. Some GUIs reject an engine that advertises no options at all; 2.0 did, these three are honoured by both cores |
+| TT is now dynamically sized | default 64 MB (2M slots, same as before, so nodes/search results are unchanged); `Hash` accepts 1–512 MB |
+| Time management honours overhead | `Move Overhead` (default 30 ms) is subtracted from the usable clock before the per-move budget is computed |
+| Perft unchanged | 26/26 checks still pass with the resized TT |
 
 ## What changed in 2.0
 
@@ -314,7 +323,9 @@ roughly 100 Elo behind Stockfish after years of that work.
   only so `stop` can interrupt it. No pondering, no Syzygy.
 - The prebuilt exe was compiled with `-march=native`. Rebuild with
   `native\build.bat` if you move the folder to a different CPU.
-- No `setoption` support (Kiwa has no tunable options, so nothing to set).
+- `setoption` supports `Hash`, `Clear Hash` and `Move Overhead`; there are no
+  other tunables. The JavaScript fallback keeps a fixed-size table, so `Hash`
+  only affects the native core.
 - The book is only consulted in the first twenty moves, and only when the search
   is not explicitly depth- or node-limited (i.e. not during analysis).
 

@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cctype>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -866,21 +867,39 @@ static int evaluate() {
 // Transposition table
 // ---------------------------------------------------------------------------
 
-static const int TT_BITS = 21;
-static const int TT_SIZE = 1 << TT_BITS;
-static const int TT_MASK = TT_SIZE - 1;
-static u64 ttKey[TT_SIZE];
-static uint32_t ttMoveArr[TT_SIZE];
-static int32_t ttScore[TT_SIZE];
-static int8_t ttDepth[TT_SIZE];
-static int8_t ttFlag[TT_SIZE];
+// 18 bytes per slot; the number of slots is rounded down to a power of two.
+static size_t ttSize = 0;
+static size_t ttMask = 0;
+static int hashMB = 64;
+static vector<u64> ttKey;
+static vector<uint32_t> ttMoveArr;
+static vector<int32_t> ttScore;
+static vector<int8_t> ttDepth;
+static vector<int8_t> ttFlag;
 
 static void clearTT() {
-  memset(ttKey, 0, sizeof(ttKey));
-  memset(ttMoveArr, 0, sizeof(ttMoveArr));
-  memset(ttScore, 0, sizeof(ttScore));
-  memset(ttDepth, 0, sizeof(ttDepth));
-  memset(ttFlag, 0, sizeof(ttFlag));
+  if (!ttSize) return;
+  fill(ttKey.begin(), ttKey.end(), 0);
+  fill(ttMoveArr.begin(), ttMoveArr.end(), 0);
+  fill(ttScore.begin(), ttScore.end(), 0);
+  fill(ttDepth.begin(), ttDepth.end(), 0);
+  fill(ttFlag.begin(), ttFlag.end(), 0);
+}
+
+static void resizeTT(int mb) {
+  if (mb < 1) mb = 1;
+  if (mb > 512) mb = 512;
+  hashMB = mb;
+  size_t entries = ((size_t)mb * 1024 * 1024) / 18;
+  size_t n = 1024;
+  while (n * 2 <= entries && n < (1u << 24)) n *= 2;
+  ttSize = n;
+  ttMask = n - 1;
+  ttKey.assign(n, 0);
+  ttMoveArr.assign(n, 0);
+  ttScore.assign(n, 0);
+  ttDepth.assign(n, 0);
+  ttFlag.assign(n, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -890,6 +909,7 @@ static void clearTT() {
 static u64 nodes = 0;
 static bool searchStop = false;
 static atomic<bool> abortFlag(false);
+static int moveOverhead = 30; // ms of the clock never spent, for GUI/IPC latency
 static u64 nodeLimit = 0;
 static i64 hardStop = INT64_MAX;
 static i64 softStop = INT64_MAX;
@@ -1015,7 +1035,7 @@ static int quiesce(int alpha, int beta, int ply, bool inCheck) {
 }
 
 static void ttStore(int depth, int score, int flag, uint32_t move, int ply) {
-  const int idx = (int)(key & TT_MASK);
+  const int idx = (int)(key & ttMask);
   if (ttKey[idx] == key && ttDepth[idx] > depth + 2 && ttFlag[idx] == 0) return;
   ttKey[idx] = key;
   ttMoveArr[idx] = move;
@@ -1041,7 +1061,7 @@ static int negamax(int depth, int alpha, int beta, int ply, bool canNull) {
   if (ply >= MAX_PLY - 1) return evaluate();
 
   uint32_t ttMove = 0;
-  const int idx = (int)(key & TT_MASK);
+  const int idx = (int)(key & ttMask);
   if (ttKey[idx] == key) {
     ttMove = ttMoveArr[idx];
     if (ttDepth[idx] >= depth) {
@@ -1267,11 +1287,12 @@ static SearchResult search(const SearchOpts& rawOpts) {
   } else if (opts.wtime >= 0) {
     const i64 t = side == WHITE ? opts.wtime : opts.btime;
     const i64 inc = side == WHITE ? opts.winc : opts.binc;
+    const i64 usable = max((i64)10, t - moveOverhead);
     const i64 mtg = opts.movestogo > 0 ? opts.movestogo : 50;
-    const i64 reserve = min((i64)150, max((i64)30, t / 50));
-    const i64 budget = max((i64)10, t - reserve);
-    i64 alloc = (i64)floor((double)t / (double)mtg + (double)inc * 0.6);
-    alloc = min(alloc, t / 2);
+    const i64 reserve = min((i64)150, max((i64)30, usable / 50));
+    const i64 budget = max((i64)10, usable - reserve);
+    i64 alloc = (i64)floor((double)usable / (double)mtg + (double)inc * 0.6);
+    alloc = min(alloc, usable / 2);
     alloc = max((i64)10, min(alloc, budget));
     moveAlloc = alloc;
     soft = started + alloc;
@@ -1461,6 +1482,7 @@ int main(int argc, char** argv) {
     }
   }
   setFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+  resizeTT(hashMB);
 
   // Optional one-shot modes: `kiwa-native perft <d>` / `kiwa-native bench`
   if (argc >= 2) {
@@ -1498,9 +1520,37 @@ int main(int argc, char** argv) {
     if (cmd.empty()) continue;
 
     if (cmd == "uci") {
-      emitInfo("id name Kiwa 2.0 (native)");
+      emitInfo("id name Kiwa 2.0.1 (native)");
       emitInfo("id author Kiwa");
+      emitInfo("option name Hash type spin default 64 min 1 max 512");
+      emitInfo("option name Clear Hash type button");
+      emitInfo("option name Move Overhead type spin default 30 min 0 max 1000");
       emitInfo("uciok");
+    } else if (cmd == "setoption") {
+      // setoption name <name, spaces allowed> [value <value>]
+      size_t np = line.find("name ");
+      size_t vp = line.find(" value ");
+      if (np != string::npos) {
+        string name = line.substr(np + 5, vp == string::npos ? string::npos : vp - (np + 5));
+        string value = vp == string::npos ? "" : line.substr(vp + 7);
+        size_t b = name.find_first_not_of(" \t");
+        size_t e = name.find_last_not_of(" \t");
+        name = b == string::npos ? "" : name.substr(b, e - b + 1);
+        for (char& c : name) c = (char)tolower((unsigned char)c);
+        b = value.find_first_not_of(" \t");
+        e = value.find_last_not_of(" \t");
+        value = b == string::npos ? "" : value.substr(b, e - b + 1);
+
+        if (name == "hash") {
+          stopSearch();
+          resizeTT(atoi(value.c_str()));
+        } else if (name == "clear hash") {
+          stopSearch();
+          clearTT();
+        } else if (name == "move overhead") {
+          moveOverhead = max(0, min(1000, atoi(value.c_str())));
+        }
+      }
     } else if (cmd == "isready") {
       emitInfo("readyok");
     } else if (cmd == "ucinewgame") {
