@@ -385,21 +385,28 @@ laptop can finish overnight.
 
 **Absolute strength, anchored on Stockfish** (100 games, 100 ms/move, book on)
 
-| Opponent | Score | W/D/L | Performance Elo |
-|---|---|---|---|
-| Stockfish 19 at `UCI_Elo 2100`, `UCI_LimitStrength` | 55/100 = 55.0% | +51 =8 −41 | **2135 ± 35** |
+| Opponent | Build | Score | W/D/L | Performance Elo |
+|---|---|---|---|---|
+| Stockfish 19 at `UCI_Elo 2100`, `UCI_LimitStrength` | **2.3.0 shipped, portable build** | 67/100 = 67.0% | +63 =8 −29 | **2223 ± 37** |
+| same anchor | 2.3.0 with mobility on every K/B/R/Q | 55/100 = 55.0% | +51 =8 −41 | 2135 ± 35 |
+| same anchor | 2.2.0 (the released exe, same conditions as above) | measured alongside, see below | | |
 
-That run used the 2.3.0 build with mobility on every K/B/R/Q; the shipped
-configuration is being re-anchored and the number below is updated when it
-finishes (`node test/elo.js --pairs 50 --ms 100 --anchor 2100 --stockfish …`).
-Both are with the book on, which is how the engine actually plays.
+So the two ways of measuring this release disagree, and both are reported.
+Head to head against 2.2.0 with the **book off** at 100 ms/move, the shipped
+build scores 46.0% (−28 ± 35): no gain. Against the strength-limited Stockfish
+with the **book on**, it scores 67.0% where the previous version measured
+heavily below that: a large gain. The difference is the book and the sample —
+the 2.2.0 anchored number in the release history below came from 24 games in a
+different session, so it is not a like-for-like control, which is why a 100-game
+anchored run of the released 2.2.0 binary is being measured under exactly today's
+conditions and its number will replace that row when it lands. Until then the
+defensible statement is: **2.3.0 measures around 2220 on Stockfish's
+limited-strength scale at 100 ms/move with its book on, and no strength gain is
+established between the two engines' searches alone.**
 
 The 2.2.0-era measurement in this file's history was 2096 ± 72 on the same scale
-(24 games, so much wider). Against that, ~2100–2140 is the honest band for both
-versions: the anchored runs do not separate them either. Treat this as "roughly a
-2100-class engine on Stockfish's limited-strength scale at 100 ms/move", not as a
-rating. Stockfish's own `UCI_Elo` calibration, this time control and the absence
-of any gauntlet are all outside the ±35.
+(24 games, so much wider). Stockfish's own `UCI_Elo` calibration, this time
+control and the absence of any gauntlet are all outside the ±37.
 
 
 **Tactical accuracy (WAC, 300 positions with a known best move)**
