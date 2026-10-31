@@ -871,7 +871,7 @@ static const int PASSED_EG[8] = { 0, 8, 12, 20, 35, 60, 100, 0 };
 // piece types get it is a build-time switch measured by test/eval-ab.js and the duel mode of test/elo.js:
 //   0 = off, 1 = knights and bishops only, 2 = also rooks and queens.
 #ifndef KIWA_MOB
-#define KIWA_MOB 2
+#define KIWA_MOB 1
 #endif
 static const int MOB_MG[7] = { 0, 0, 3, 2, 2, 1, 0 };
 static const int MOB_EG[7] = { 0, 0, 3, 2, 3, 1, 0 };
@@ -1225,9 +1225,10 @@ static void extras() {
 }
 
 // Positional terms (pawn structure, outposts, bishop quality, rook activity,
-// king shield, passed-pawn king distance, mobility). Measured by
-// test/eval-ab.js: they buy tactical accuracy at a fixed time control but cost
-// nodes per second, so the switch stays for reproduction of those runs.
+// king shield, passed-pawn king distance, mobility). KIWA_EXTRAS=0 compiles the
+// block out, which is how the ablation duels in the README were measured; the
+// shipped build has it on. Keep the switch: without it the claim that these
+// terms are worth their ~40% cost in nodes/s cannot be re-checked.
 #ifndef KIWA_EXTRAS
 #define KIWA_EXTRAS 1
 #endif

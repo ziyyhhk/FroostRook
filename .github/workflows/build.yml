@@ -47,11 +47,29 @@ jobs:
       - name: Node regression tests
         shell: bash
         run: |
+          node test/perft-native.js
           node test/book-check.js
           node test/rules.js
           node test/prediction.js
           node test/uci-smoke.js
           node test/openings-native.js 20 6
+          node test/book-fallback.js 2 6
+
+      - name: Zip the testable build (binaries plus the Node front-end)
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          dir="dist/KiwaChess-$version"
+          mkdir -p "$dir/native" "$dir/data" "$dir/test"
+          cp native/KiwaChess.exe native/kiwa-native.exe "$dir/"
+          cp kiwa.bat README.md engine.js uci.js native.js book.js play.js package.json predict-model.js "$dir/"
+          cp native/book_data.h "$dir/native/"
+          cp data/*.json "$dir/data/"
+          cp test/*.js test/*.md "$dir/test/"
+          cp -r test/data "$dir/test/"
+          cp -r test/human-games "$dir/test/"
+          ( cd dist && powershell -Command "Compress-Archive -Path 'KiwaChess-$version' -DestinationPath 'KiwaChess-$version-full.zip' -Force" )
+          ls -l dist/
 
       - uses: actions/upload-artifact@v4
         with:
@@ -59,6 +77,7 @@ jobs:
           path: |
             native/KiwaChess.exe
             native/kiwa-native.exe
+            dist/*-full.zip
 
       - name: Attach binary to the release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -68,5 +87,5 @@ jobs:
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
             gh release create "$GITHUB_REF_NAME" --title "KiwaChess ${GITHUB_REF_NAME#v}" \
-              --notes "Portable Windows x64 build (generic x86-64, no CPU-specific instructions). Import KiwaChess.exe directly into any UCI GUI; kiwa-native.exe is the same binary under the name the Node front-end expects."
-          gh release upload "$GITHUB_REF_NAME" native/KiwaChess.exe native/kiwa-native.exe --clobber
+              --notes "Portable Windows x64 build (generic x86-64, no CPU-specific instructions). Import KiwaChess.exe directly into any UCI GUI; kiwa-native.exe is the same binary under the name the Node front-end expects. The -full.zip is the same engine plus the Node front-end, opening book, learned prediction model and the test suite, so the personalities, predictor and benchmarks can be run locally."
+          gh release upload "$GITHUB_REF_NAME" native/KiwaChess.exe native/kiwa-native.exe dist/*-full.zip --clobber
