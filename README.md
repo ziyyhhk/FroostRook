@@ -138,16 +138,18 @@ the existing pawn-structure hash and an extras cache keyed on the full position:
 | Rooks | open and semi-open files, seventh rank, connected on the same rank with nothing between |
 | King safety | pawn shield on and one rank in front of the king, midgame only |
 
-Every term was measured before it was kept, and the release configuration is the
-one that won — see [Measured strength](#measured-strength-fast-time-control) for
-the ablation table. In short: the positional block on its own draws with 2.2.0 at
-this tempo, adding ray-scan mobility turns that into +140 ± 49, extending
-mobility from knights and bishops to rooks and queens wins nothing further while
-costing another 11% of nodes/s (so the build stops at knights and bishops), and
-the static-exchange prune in quiescence is worth more than the whole positional
-block on its own. No term is a constant bonus for owning a square class, and the
-phase interpolation is the existing one, so nothing is counted twice at one end
-of the game and again at the other.
+Every term was measured before it was kept, and the measurements are collected in
+[Measured strength](#measured-strength-fast-time-control) with their intervals —
+none of them significant on its own, so what follows is direction, not size. The
+positional block without mobility drew with 2.2.0; adding ray-scan mobility moved
+the same comparison up, and giving it to rooks and queens as well as knights and
+bishops gained nothing further in a head-to-head while costing 11% more of the
+nodes per move, which is why the release stops at knights and bishops. The
+static-exchange prune appears to matter more than the whole positional block:
+switching it off moved the measurement from clearly positive to clearly negative.
+No term is a constant bonus for owning a square class, and the phase
+interpolation is the existing one, so nothing is counted twice at one end of the
+game and again at the other.
 
 The JavaScript fallback keeps the pre-2.3.0 evaluation (material, PST, the
 pawn-structure hash and its older extras). It is a fallback for when the native
@@ -753,8 +755,9 @@ after years of exactly that work.
   hundreds of thousands of games and GPU time this project does not have.
 - **The duel comparisons are same-flags only where stated.** The 2.2.0 *released*
   binary was built generically by CI, so a head-to-head against a `-march=native`
-  build mixes a code difference with a compiler difference; the +140 ± 49 number
-  is the same-flags comparison, which is the one that isolates the code.
+  build mixes a code difference with a compiler difference. The same-flags rows
+  (shipped configuration: 43/80, +26 ± 39) are the ones that isolate the code,
+  and they are the reason no Elo gain is claimed.
 - **The prediction dataset is eight Lichess accounts.** 876 games, mostly club
   level blitz/bullet under clock pressure. Intervals are ±3–4 points; the model
   is over-confident above 0.7 probability; and on 19th-century games the learned
