@@ -387,11 +387,15 @@ laptop can finish overnight.
 |---|---|---|---|
 | Stockfish 19 at `UCI_Elo 2100`, `UCI_LimitStrength` | 55/100 = 55.0% | +51 =8 −41 | **2135 ± 35** |
 
-The 2.2.0-era measurement in this file's history was 2096 ± 72 on the same scale,
-so the direction agrees with the controlled duel and disagrees with the
-shipped-vs-shipped duel — which is what you get when one number is sampling
-24 games and the other is sampling 100. Treat the honest range as "roughly a
-2100–2140 engine on Stockfish's limited-strength scale at 100 ms/move", not as a
+That run used the 2.3.0 build with mobility on every K/B/R/Q; the shipped
+configuration is being re-anchored and the number below is updated when it
+finishes (`node test/elo.js --pairs 50 --ms 100 --anchor 2100 --stockfish …`).
+Both are with the book on, which is how the engine actually plays.
+
+The 2.2.0-era measurement in this file's history was 2096 ± 72 on the same scale
+(24 games, so much wider). Against that, ~2100–2140 is the honest band for both
+versions: the anchored runs do not separate them either. Treat this as "roughly a
+2100-class engine on Stockfish's limited-strength scale at 100 ms/move", not as a
 rating. Stockfish's own `UCI_Elo` calibration, this time control and the absence
 of any gauntlet are all outside the ±35.
 
@@ -400,11 +404,16 @@ of any gauntlet are all outside the ±35.
 
 | Build | @100,000 nodes/move | @200,000 nodes/move | @300 ms/move | @1 s/move |
 |---|---|---|---|---|
-| 2.2.0 (source, same `-march=native` flags) | 216/300 (72.0%) | 235/300 (78.3%) | 251/300 (83.7%) | 263/300 (87.7%) |
+| 2.2.0 (source, `-march=native`) | 216/300 (72.0%) | 235/300 (78.3%) | 251/300 (83.7%) | 263/300 (87.7%) |
 | 2.2.0 (released exe, generic build) | 220/300 (73.3%) | 239/300 (79.7%) | 253/300 (84.3%) | 266/300 (88.7%) |
-| **2.3.0 (release build, shipped mobility setting)** | 223/300 (74.3%) | 241/300 (80.3%) | 245/300 (81.7%) | 258/300 (86.0%) |
+| **2.3.0 shipped configuration** | 223/300 (74.3%) | 241/300 (80.3%) | 245/300 (81.7%) | 258/300 (86.0%) |
 
-This one cuts both ways, so both halves are here. At an equal **node** budget the
+The node-budget columns are the portable release build of 2.3.0 and the matching
+2.2.0 builds; the clock columns are the same configurations built
+`-O3 -march=native`, because a clock-budget run otherwise measures the compiler
+flags rather than the engine.
+
+This cuts both ways, so both halves are here. At an equal **node** budget the
 new evaluation is ahead — 223 vs 216/220 at 100k and 241 vs 235/239 at 200k —
 because a stable positional assessment lets the tactical search prune correctly.
 At an equal **clock** it solves 5–8 *fewer* puzzles: the positional block costs
