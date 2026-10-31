@@ -10,6 +10,7 @@
     "test": "node test/perft.js && node test/bench.js",
     "test:native": "node test/perft-native.js && node test/wac-native.js 300 300",
     "match:native": "node test/match-native.js 100 10",
+    "elo": "node test/elo.js",
     "test:uci": "node test/uci-smoke.js",
     "test:book": "node test/book-check.js",
     "predict": "node test/predict.js",

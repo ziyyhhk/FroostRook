@@ -169,13 +169,19 @@ closed.
 platforms running their own Stockfish builds (Chessify advertises Stockfish 18
 and 19). There is no import path for a local UCI engine.
 
-**Strength estimate:** the honest way is a local match against Stockfish in
-Cute Chess: add `kiwa.bat` as one engine, a Stockfish binary as the other, and
-run 100 games at 1 s + 0.01 s. Losing by several hundred Elo would be normal for
-a handcrafted engine. No calibrated Elo has been measured. The native core
-searches about 3–4× faster and solves 260/300 WAC positions at 1 s/move, but
-that is not an Elo rating, and no game result against Stockfish has been
-recorded yet.
+**Measured strength (fast TC):** `test/elo.js` plays the native exe against
+Stockfish 19 with `UCI_LimitStrength` / `UCI_Elo`, both at 100 ms/move,
+alternating colours on paired openings. 24 games (16 at anchor 2100, 8 at 2000)
+scored 13/24 (54.2%), a joint maximum-likelihood estimate of **2096 Elo ± 72**
+(1σ sampling) on Stockfish's limited-strength scale. At the 2100 anchor itself:
+8/16 = 50%, performance 2100. All 24 games were decisive.
+
+Read that as "roughly a 2100 engine at 100 ms/move against this calibration",
+not an official rating. The ±72 covers sampling noise only: Stockfish's
+`UCI_Elo` scale is itself approximate, 100 ms/move is far faster than CCRL's
+40/15, and human Lichess ratings are a different pool. The native core solves
+260/300 WAC positions at 1 s/move (236–248/300 at 300 ms), so it should gain
+some strength at longer time controls; that has not been measured.
 
 ## Benchmarks
 
@@ -194,6 +200,7 @@ native core built with GCC 16.2 `-O3 -march=native`.
 | Time management, native | 3+0 ≈ 2.7 s, 5+0 ≈ 6.2 s, 10+0 ≈ 6.7 s per move at 40 moves-to-go; hard cap 1.5× the soft budget |
 | UCI `stop` | answers in 519–639 ms during a 30 s search |
 | Native vs JS head-to-head | native 8/10 at 100 ms/move (+8 =0 −2, alternating colours; small sample) |
+| Anchored Elo, native vs Stockfish 19 (`UCI_Elo`), 100 ms/move | 24 games: 13/24 (0 draws), joint estimate 2096 ± 72 (1σ sampling); 8/16 at anchor 2100 |
 | Opening book validation | 5,578 positions, 8,191 moves, 0 illegal |
 | UCI smoke test (native path) | handshake, book opening, search, mate-in-one all pass |
 | vs random mover, 50 ms/move (JS 1.x) | 6/6 wins |
@@ -210,6 +217,7 @@ node test/bench.js
 node test/wac.js 300 300
 node test/wac-native.js 300 300
 node test/match-native.js 100 10
+node test/elo.js --anchor 2100 --ms 100 --pairs 8 --stockfish /path/to/stockfish
 node test/uci-smoke.js
 node test/book-check.js
 native/kiwa-native.exe bench          # depth-12 speed probe
@@ -283,6 +291,7 @@ test/bench.js         speed, mate tests, baseline matches
 test/wac.js           tactical benchmark, JS engine
 test/wac-native.js    tactical benchmark, native engine
 test/match-native.js  native vs JS at equal time, alternating colours
+test/elo.js           anchored Elo match vs Stockfish UCI_LimitStrength
 test/predict.js       human-move prediction accuracy
 test/gen-book.js      builds book.js from book-data/
 test/book-check.js    validates every book entry against the engine
@@ -303,7 +312,8 @@ Honest gaps:
 - **Evaluation**: handcrafted terms vs a trained neural network.
 - **Tuning**: no SPSA or large-scale self-play tuning; changes are measured on
   WAC and short matches, which have real noise.
-- **Testing**: no CCRL/gauntlet rating, no matches against strong engines.
+- **Testing**: one 24-game anchored match against strength-limited Stockfish;
+  no CCRL/gauntlet rating and no games against full-strength engines.
 - **Book**: opening theory only. Kiwa does not know endgame tablebases.
 - **Prediction**: tuned on two 19th-century games; a modern-game set would be a
   better test.
