@@ -3,6 +3,7 @@ node_modules/
 # Built binaries: releases and CI artifacts carry them, not git history.
 dist/
 native/kiwa-native.exe
+native/KiwaChess.exe
 
 # Local build/measure artifacts (never committed)
 .build/

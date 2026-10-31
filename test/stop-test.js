@@ -50,20 +50,34 @@ function run({ threads, goCmd, stopAfter, label }) {
 }
 
 (async () => {
-  const cases = [];
-  for (const threads of [1, 2, 4]) {
-    cases.push(run({ threads, goCmd: 'go infinite', stopAfter: 1200, label: `threads=${threads} go infinite + stop@1.2s` }));
-  }
-  for (const threads of [1, 2, 4]) {
-    cases.push(run({ threads, goCmd: 'go movetime 5000', stopAfter: 800, label: `threads=${threads} go movetime 5000 + stop@0.8s` }));
-  }
-  cases.push(run({ threads: 4, goCmd: 'go movetime 400', stopAfter: 0, label: 'threads=4 go movetime 400 (natural finish)' }));
+  // The bound for a stopped search has to be well under the movetime it was
+  // cut short from: answering at 4.9s for `movetime 5000` would still be a
+  // bestmove, but would mean `stop` was ignored and the clock ran out instead.
+  const cases = [
+    { threads: 1, goCmd: 'go infinite', stopAfter: 1200, maxMs: 3000, label: 'threads=1 go infinite + stop@1.2s' },
+    { threads: 2, goCmd: 'go infinite', stopAfter: 1200, maxMs: 3000, label: 'threads=2 go infinite + stop@1.2s' },
+    { threads: 4, goCmd: 'go infinite', stopAfter: 1200, maxMs: 3000, label: 'threads=4 go infinite + stop@1.2s' },
+    { threads: 1, goCmd: 'go movetime 5000', stopAfter: 800, maxMs: 2500, label: 'threads=1 go movetime 5000 + stop@0.8s' },
+    { threads: 2, goCmd: 'go movetime 5000', stopAfter: 800, maxMs: 2500, label: 'threads=2 go movetime 5000 + stop@0.8s' },
+    { threads: 4, goCmd: 'go movetime 5000', stopAfter: 800, maxMs: 2500, label: 'threads=4 go movetime 5000 + stop@0.8s' },
+    { threads: 4, goCmd: 'go movetime 400', stopAfter: 0, maxMs: 2500, label: 'threads=4 go movetime 400 (natural finish)' },
+  ];
 
-  for (const r of await Promise.all(cases)) {
-    console.log(`${r.verdict.padEnd(12)} ${String(r.ms).padStart(6)}ms  ${r.label}`);
-    if (r.verdict !== 'bestmove') {
+  const results = await Promise.all(cases.map(c => run(c)));
+  let failed = 0;
+  for (const [i, r] of results.entries()) {
+    const bound = cases[i].maxMs;
+    const ok = r.verdict === 'bestmove' && r.ms <= bound;
+    if (!ok) failed++;
+    console.log(`${ok ? 'PASS' : 'FAIL'}  ${String(r.ms).padStart(6)}ms (<= ${bound})  ${r.label}`);
+    if (!ok) {
       if (r.out) console.log('  stdout tail:', JSON.stringify(r.out));
       if (r.err) console.log('  stderr tail:', JSON.stringify(r.err));
     }
   }
+  if (failed) {
+    console.error(`\n${failed} stop-behaviour case(s) failed`);
+    process.exit(1);
+  }
+  console.log('\nall stop tests passed');
 })();

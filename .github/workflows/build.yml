@@ -47,11 +47,13 @@ jobs:
       - name: Node regression tests
         shell: bash
         run: |
+          node test/perft.js
           node test/perft-native.js
           node test/book-check.js
           node test/rules.js
           node test/prediction.js
           node test/uci-smoke.js
+          node test/stop-test.js
           node test/openings-native.js 20 6
           node test/book-fallback.js 2 6
 
@@ -63,8 +65,10 @@ jobs:
           mkdir -p "$dir/native" "$dir/data" "$dir/test"
           cp native/KiwaChess.exe native/kiwa-native.exe "$dir/"
           cp kiwa.bat README.md engine.js uci.js native.js book.js play.js package.json predict-model.js "$dir/"
-          cp native/book_data.h "$dir/native/"
+          cp native/book_data.h native/kiwa.cpp native/build.bat "$dir/native/"
           cp data/*.json "$dir/data/"
+          cp wacnew.epd "$dir/"
+          cp -r book-data "$dir/"
           cp test/*.js test/*.md "$dir/test/"
           cp -r test/data "$dir/test/"
           cp -r test/human-games "$dir/test/"
