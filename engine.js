@@ -905,6 +905,46 @@ function isRepetition() {
   return false;
 }
 
+// Dead position (FIDE 5.2.2): no legal sequence can produce mate. Pawns,
+// rooks and queens can always mate in principle, so their presence settles it.
+function isInsufficientMaterial() {
+  for (let c = 0; c < 2; c++) {
+    if (pieceCount[c * 6 + PAWN - 1] || pieceCount[c * 6 + ROOK - 1] ||
+        pieceCount[c * 6 + QUEEN - 1]) return false;
+  }
+  const knights = pieceCount[KNIGHT - 1] + pieceCount[6 + KNIGHT - 1];
+  const bishops = pieceCount[BISHOP - 1] + pieceCount[6 + BISHOP - 1];
+  if (knights === 0 && bishops === 0) return true;
+  if (knights + bishops === 1) return true;
+  if (knights === 0) {
+    let colour = -1;
+    let sameColour = true;
+    for (let c = 0; c < 2 && sameColour; c++) {
+      const pi = c * 6 + BISHOP - 1;
+      for (let i = 0; i < pieceCount[pi]; i++) {
+        const sq = pieceSq[pi * 16 + i];
+        const sqColour = ((sq >> 4) + (sq & 7)) & 1;
+        if (colour < 0) colour = sqColour;
+        else if (colour !== sqColour) { sameColour = false; break; }
+      }
+    }
+    if (sameColour) return true;
+  }
+  return false;
+}
+
+function isCheckmate() {
+  return inCheck() && getLegalMoves().length === 0;
+}
+
+function isStalemate() {
+  return !inCheck() && getLegalMoves().length === 0;
+}
+
+function isDraw() {
+  return isStalemate() || isInsufficientMaterial() || halfmove >= 100 || isRepetition();
+}
+
 function moveScore(mv, ttMove, ply, prevMv) {
   if (mv === ttMove) return 1 << 28;
   const from = mv & 127;
@@ -1021,7 +1061,7 @@ function negamax(depth, alpha, beta, ply, canNull) {
 
   if (ply > 0) {
     if (halfmove >= 100) return 0;
-    if (isRepetition()) return 0;
+    if (isRepetition() || isInsufficientMaterial()) return 0;
   }
   if (ply >= MAX_PLY - 1) return evaluate();
 
@@ -1271,6 +1311,19 @@ function search(opts = {}) {
   for (let i = 0; i < history.length; i++) history[i] >>= 1;
 
   const started = now;
+
+  // The root itself can already be a claimable draw. Return a legal move and
+  // score 0 immediately; stalemate has no legal move and falls through.
+  if (isDraw()) {
+    const legal = getLegalMoves();
+    if (legal.length) {
+      const mv = legal[0];
+      const move = moveToStr(mv);
+      if (infoHandler) infoHandler(`info depth 1 score cp 0 nodes 0 nps 0 time 0 pv ${move}`);
+      return { bestMove: mv, bestMoveStr: move, score: 0, depth: 1, nodes: 0, time: 0, pv: [move] };
+    }
+  }
+
   let lastPv = [];
   let prevScore = 0;
   let prevIterMove = 0;
@@ -1676,6 +1729,7 @@ module.exports = {
   WHITE, BLACK, START_FEN,
   setFen, applyUciMove, getLegalMoves, moveToStr, boardAscii,
   search, predict, perft, evaluate, inCheck,
+  isCheckmate, isStalemate, isInsufficientMaterial, isDraw,
   setInfoHandler, clearTT, hasNonPawn,
   randomMove, greedyMove, getFen, applyMoveInt, describeMove,
   get side() { return side; },

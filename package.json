@@ -1,6 +1,6 @@
 {
   "name": "kiwa-chess",
-  "version": "2.0.1",
+  "version": "2.2.0",
   "private": true,
   "description": "From-scratch chess engine: C++17 search core, JavaScript front-end, opening book and human move prediction",
   "scripts": {
@@ -15,6 +15,9 @@
     "test:book": "node test/book-check.js",
     "predict": "node test/predict.js",
     "wac": "node test/wac.js 300 300",
-    "book": "node test/gen-book.js"
+    "book": "node test/gen-book.js",
+    "test:rules": "node test/rules.js",
+    "test:stop": "node test/stop-test.js",
+    "book:native": "node test/gen-native-book.js"
   }
 }

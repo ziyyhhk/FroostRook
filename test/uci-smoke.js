@@ -59,22 +59,44 @@ function assert(cond, msg) {
 (async () => {
   send('uci');
   await waitFor(l => l === 'uciok', 15000, 'uciok');
-  assert(lines.some(l => l.startsWith('id name Kiwa')), 'engine identifies itself');
+  assert(lines.some(l => l.startsWith('id name KiwaChess 2.2.0')), 'engine identifies itself');
+  for (const opt of ['Threads', 'Hash', 'OwnBook', 'Book Depth', 'Book Variety', 'Move Overhead', 'Clear Hash']) {
+    assert(lines.some(l => l.startsWith(`option name ${opt} `)), `advertises ${opt}`);
+  }
 
   send('isready');
   await waitFor(l => l === 'readyok');
 
-  // Opening book must answer move one instantly with a real first move.
+  // The Threads option must reach the native core and still answer.
+  send('setoption name Threads value 2');
+  send('position fen r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 4 6');
+  send('go movetime 300');
+  const mt = await waitFor(l => l.startsWith('bestmove '), 15000);
+  assert(/^bestmove [a-h][1-8][a-h][1-8][qrbn]?$/.test(mt), `2-thread search returned a move: ${mt}`);
+  send('setoption name Threads value 1');
+
+  // Book Variety 0 must return the most popular book move.
+  send('setoption name Book Variety value 0');
   send('ucinewgame');
   send('position startpos');
   const t0 = Date.now();
   send('go wtime 60000 btime 60000 winc 0 binc 0');
   const bm = await waitFor(l => l.startsWith('bestmove '));
   const first = bm.split(' ')[1];
-  const book = require('../book.js');
-  const startMoves = book.BOOK['rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq'].map(r => r[0]);
-  assert(startMoves.includes(first), `book opening: ${first}`);
+  assert(first === 'e2e4', `Book Variety 0 opens e2e4: ${first}`);
   assert(Date.now() - t0 < 2000, `book answered fast (${Date.now() - t0} ms)`);
+
+  // At full variety the first move should not be hard-wired.
+  send('setoption name Book Variety value 100');
+  const starts = new Set();
+  for (let i = 0; i < 12; i++) {
+    send('ucinewgame');
+    send('position startpos');
+    send('go wtime 60000 btime 60000 winc 0 binc 0');
+    const line = await waitFor(l => l.startsWith('bestmove '));
+    starts.add(line.split(' ')[1]);
+  }
+  assert(starts.size >= 2, `book variety produced ${starts.size} distinct first moves: ${[...starts].join(',')}`);
 
   // A middlegame position must be searched, not booked.
   send('position fen r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 4 6');

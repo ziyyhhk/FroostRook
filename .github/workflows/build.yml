@@ -26,19 +26,30 @@ jobs:
         run: |
           cd native
           g++ -O3 -std=c++17 -static -o kiwa-native.exe kiwa.cpp
-          ls -l kiwa-native.exe
+          cp kiwa-native.exe KiwaChess.exe
+          ls -l kiwa-native.exe KiwaChess.exe
 
       - name: Perft smoke test
         shell: msys2 {0}
         run: |
-          out=$(native/kiwa-native.exe perft 4)
+          out=$(native/KiwaChess.exe perft 4)
           echo "$out"
           echo "$out" | grep -q 197281
 
+      - name: Book / rules smoke test
+        shell: msys2 {0}
+        run: |
+          out=$(printf 'position startpos\ngo wtime 60000 btime 60000\nquit\n' | native/KiwaChess.exe)
+          echo "$out" | grep -q '^bestmove '
+          out2=$(printf 'position fen 7k/5Q2/6K1/8/8/8/8/8 b - - 0 1\ngo depth 2\nquit\n' | native/KiwaChess.exe)
+          echo "$out2" | grep -q 'bestmove 0000'
+
       - uses: actions/upload-artifact@v4
         with:
-          name: kiwa-windows-x64
-          path: native/kiwa-native.exe
+          name: KiwaChess-windows-x64
+          path: |
+            native/KiwaChess.exe
+            native/kiwa-native.exe
 
       - name: Attach binary to the release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -47,6 +58,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
-            gh release create "$GITHUB_REF_NAME" --title "Kiwa ${GITHUB_REF_NAME#v}" \
-              --notes "Windows x64 build, portable (no CPU-specific instructions)."
-          gh release upload "$GITHUB_REF_NAME" native/kiwa-native.exe --clobber
+            gh release create "$GITHUB_REF_NAME" --title "KiwaChess ${GITHUB_REF_NAME#v}" \
+              --notes "Portable Windows x64 build (generic x86-64, no CPU-specific instructions). Import KiwaChess.exe directly into any UCI GUI; kiwa-native.exe is the same binary under the name the Node front-end expects."
+          gh release upload "$GITHUB_REF_NAME" native/KiwaChess.exe native/kiwa-native.exe --clobber

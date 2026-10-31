@@ -22,6 +22,8 @@
 #include <mutex>
 #include <chrono>
 #include <algorithm>
+#include <random>
+#include "book_data.h"
 
 using namespace std;
 
@@ -46,6 +48,8 @@ static inline int pc(int c, int t) { return t | (c << 3); }
 static inline int typeOf(int p) { return p & 7; }
 static inline int colorOf(int p) { return p >> 3; }
 static inline bool validSq(int s) { return (s & 0x88) == 0; }
+// Index into pieceSq/pieceCount; distinct from the packed board code `pc()`.
+static inline int pieceIndex(int c, int t) { return c * 6 + t - 1; }
 
 static const int KNIGHT_D[8] = { 33, 31, 18, 14, -33, -31, -18, -14 };
 static const int KING_D[8] = { 17, 16, 15, 1, -1, -15, -16, -17 };
@@ -193,40 +197,42 @@ static void initTables() {
 // Board state
 // ---------------------------------------------------------------------------
 
-static int8_t board[128];
-static int pieceSq[12 * 16];
-static int pieceCount[12];
-static int kingSq[2];
+// All mutable position/search state is thread-local: each search thread owns
+// a full board and search stack, so "Threads" can run real parallel searches.
+static thread_local int8_t board[128];
+static thread_local int pieceSq[12 * 16];
+static thread_local int pieceCount[12];
+static thread_local int kingSq[2];
 
-static int side = WHITE;
-static int castling = 0;
-static int epSq = -1;
-static int halfmove = 0;
-static int fullmove = 1;
+static thread_local int side = WHITE;
+static thread_local int castling = 0;
+static thread_local int epSq = -1;
+static thread_local int halfmove = 0;
+static thread_local int fullmove = 1;
 
-static u64 key = 0;      // full position key
-static u64 pawnKey = 0;  // pawn-only key, for the pawn-structure cache
-static int mg = 0, eg = 0, phase = 0;
+static thread_local u64 key = 0;      // full position key
+static thread_local u64 pawnKey = 0;  // pawn-only key, for the pawn-structure cache
+static thread_local int mg = 0, eg = 0, phase = 0;
 
-static int stCastling[MAX_HIST];
-static int stEp[MAX_HIST];
-static int stHalf[MAX_HIST];
-static u64 stKey[MAX_HIST];
-static int stCap[MAX_HIST];
-static int stateTop = 0;
+static thread_local int stCastling[MAX_HIST];
+static thread_local int stEp[MAX_HIST];
+static thread_local int stHalf[MAX_HIST];
+static thread_local u64 stKey[MAX_HIST];
+static thread_local int stCap[MAX_HIST];
+static thread_local int stateTop = 0;
 
-static u64 posKeys[MAX_HIST];
-static int histLen = 0;
+static thread_local u64 posKeys[MAX_HIST];
+static thread_local int histLen = 0;
 
-static uint32_t moveBuf[MAX_PLY * MAX_MOVES];
-static int scoreBuf[MAX_PLY * MAX_MOVES];
+static thread_local uint32_t moveBuf[MAX_PLY * MAX_MOVES];
+static thread_local int scoreBuf[MAX_PLY * MAX_MOVES];
 
-static int pvTable[MAX_PLY * MAX_PLY];
-static int pvLength[MAX_PLY];
-static int killers[MAX_PLY * 2];
-static int counter[128 * 128];
-static int history[2 * 128 * 128];
-static uint32_t moveStack[MAX_PLY];
+static thread_local int pvTable[MAX_PLY * MAX_PLY];
+static thread_local int pvLength[MAX_PLY];
+static thread_local int killers[MAX_PLY * 2];
+static thread_local int counter[128 * 128];
+static thread_local int history[2 * 128 * 128];
+static thread_local uint32_t moveStack[MAX_PLY];
 
 // ---------------------------------------------------------------------------
 // Piece handling
@@ -715,23 +721,23 @@ static inline void unmakeNull() {
 // Evaluation
 // ---------------------------------------------------------------------------
 
-static int wpFiles[8];
-static int bpFiles[8];
+static thread_local int wpFiles[8];
+static thread_local int bpFiles[8];
 static const int PASSED[8] = { 0, 8, 12, 20, 35, 60, 100, 0 };
 
 // Pawn-structure cache keyed by the pawn-only Zobrist key.
 static const int PH_SIZE = 1 << 13;
 static const int PH_MASK = PH_SIZE - 1;
-static u64 phKey[PH_SIZE];
-static int phScore[PH_SIZE];
-static int phWB[PH_SIZE];
-static int phBB[PH_SIZE];
+static thread_local u64 phKey[PH_SIZE];
+static thread_local int phScore[PH_SIZE];
+static thread_local int phWB[PH_SIZE];
+static thread_local int phBB[PH_SIZE];
 
 // Whole-extras cache keyed by the position hash.
 static const int EX_SIZE = 1 << 15;
 static const int EX_MASK = EX_SIZE - 1;
-static u64 exKey[EX_SIZE];
-static int exScore[EX_SIZE];
+static thread_local u64 exKey[EX_SIZE];
+static thread_local int exScore[EX_SIZE];
 
 static int extrasRaw() {
   const int wpIdx = 0 * 6 + PAWN - 1, bpIdx = 1 * 6 + PAWN - 1;
@@ -871,6 +877,14 @@ static int evaluate() {
 static size_t ttSize = 0;
 static size_t ttMask = 0;
 static int hashMB = 64;
+// Each search thread gets a private slice of the shared table, so no locks
+// and no data races. -1 means "use the whole table".
+static thread_local size_t ttOffset = 0;
+static thread_local size_t ttSegMask = (size_t)-1;
+static inline size_t ttIdx(u64 k) {
+  const size_t m = ttSegMask == (size_t)-1 ? ttMask : ttSegMask;
+  return ttOffset + (size_t)(k & m);
+}
 static vector<u64> ttKey;
 static vector<uint32_t> ttMoveArr;
 static vector<int32_t> ttScore;
@@ -906,19 +920,27 @@ static void resizeTT(int mb) {
 // Search
 // ---------------------------------------------------------------------------
 
-static u64 nodes = 0;
-static bool searchStop = false;
+static thread_local u64 nodes = 0;
+static thread_local bool searchStop = false;
+static thread_local int threadId = 0;
 static atomic<bool> abortFlag(false);
 static int moveOverhead = 30; // ms of the clock never spent, for GUI/IPC latency
-static u64 nodeLimit = 0;
-static i64 hardStop = INT64_MAX;
-static i64 softStop = INT64_MAX;
-static i64 moveAlloc = 0;
+static bool ownBook = true;
+static int bookDepthPlies = 24;
+static int bookVariety = 100;
+static int threads = 1;
+static bool bookAllowed = false; // only for games that started from the initial position
+static mt19937_64 bookRng((u64)chrono::steady_clock::now().time_since_epoch().count() ^
+                          ((u64)random_device{}() << 32));
+static thread_local u64 nodeLimit = 0;
+static thread_local i64 hardStop = INT64_MAX;
+static thread_local i64 softStop = INT64_MAX;
+static thread_local i64 moveAlloc = 0;
 
-static int rootBest = 0;
-static int rootScore = 0;
-static int rootDepth = 0;
-static int rootPrevBest = 0;
+static thread_local int rootBest = 0;
+static thread_local int rootScore = 0;
+static thread_local int rootDepth = 0;
+static thread_local int rootPrevBest = 0;
 
 static int LMR[64][MAX_MOVES];
 
@@ -943,6 +965,37 @@ static bool isRepetition() {
   if (stop < 0) stop = 0;
   for (int i = histLen - 3; i >= stop; i -= 2) {
     if (posKeys[i] == key) return true;
+  }
+  return false;
+}
+
+// Dead positions under FIDE 5.2.2: no sequence of legal moves can lead to
+// mate. That covers K vs K, K+minor vs K, and any number of bishops that all
+// live on one colour (K+B vs K+B with same-coloured bishops included).
+static bool insufficientMaterial() {
+  for (int c = 0; c < 2; c++) {
+    if (pieceCount[pieceIndex(c, PAWN)] || pieceCount[pieceIndex(c, ROOK)] ||
+        pieceCount[pieceIndex(c, QUEEN)]) {
+      return false;
+    }
+  }
+  const int knights = pieceCount[pieceIndex(WHITE, KNIGHT)] + pieceCount[pieceIndex(BLACK, KNIGHT)];
+  const int bishops = pieceCount[pieceIndex(WHITE, BISHOP)] + pieceCount[pieceIndex(BLACK, BISHOP)];
+  if (knights == 0 && bishops == 0) return true; // bare kings
+  if (knights + bishops == 1) return true;      // one minor piece
+  if (knights == 0) {
+    int colour = -1;
+    bool sameColour = true;
+    for (int c = 0; c < 2 && sameColour; c++) {
+      const int pi = pieceIndex(c, BISHOP);
+      for (int i = 0; i < pieceCount[pi]; i++) {
+        const int sq = pieceSq[pi * 16 + i];
+        const int sqColour = ((sq >> 4) + (sq & 7)) & 1;
+        if (colour < 0) colour = sqColour;
+        else if (colour != sqColour) sameColour = false;
+      }
+    }
+    if (sameColour) return true;
   }
   return false;
 }
@@ -1035,7 +1088,7 @@ static int quiesce(int alpha, int beta, int ply, bool inCheck) {
 }
 
 static void ttStore(int depth, int score, int flag, uint32_t move, int ply) {
-  const int idx = (int)(key & ttMask);
+  const size_t idx = ttIdx(key);
   if (ttKey[idx] == key && ttDepth[idx] > depth + 2 && ttFlag[idx] == 0) return;
   ttKey[idx] = key;
   ttMoveArr[idx] = move;
@@ -1056,12 +1109,12 @@ static int negamax(int depth, int alpha, int beta, int ply, bool canNull) {
 
   if (ply > 0) {
     if (halfmove >= 100) return 0;
-    if (isRepetition()) return 0;
+    if (isRepetition() || insufficientMaterial()) return 0;
   }
   if (ply >= MAX_PLY - 1) return evaluate();
 
   uint32_t ttMove = 0;
-  const int idx = (int)(key & ttMask);
+  const size_t idx = ttIdx(key);
   if (ttKey[idx] == key) {
     ttMove = ttMoveArr[idx];
     if (ttDepth[idx] >= depth) {
@@ -1186,6 +1239,9 @@ static RootResult rootSearch(int depth, int alpha, int beta) {
     const uint32_t mv = moveBuf[base + i];
     int sc = moveScore(mv, (uint32_t)rootPrevBest, 0, 0);
     if ((int)mv == rootPrevBest) sc = 1 << 29;
+    // Helpers start at slightly different root orders, otherwise every thread
+    // with an empty slice would walk the identical tree.
+    if (threadId > 0) sc += (int)((mv * 2654435761u + (uint32_t)threadId * 7919u) % 17u);
     scoreBuf[base + i] = sc;
   }
 
@@ -1321,6 +1377,36 @@ static SearchResult search(const SearchOpts& rawOpts) {
   memset(killers, 0, sizeof(killers));
   for (int i = 0; i < 2 * 128 * 128; i++) history[i] >>= 1;
 
+  // The root can already be a claimable draw. Answer immediately with score 0,
+  // but only when a legal move exists: checkmate/stalemate take precedence and
+  // are handled by the normal root search below.
+  if (halfmove >= 100 || isRepetition() || insufficientMaterial()) {
+    const int n = generateMoves(0, false);
+    for (int i = 0; i < n; i++) {
+      const uint32_t mv = moveBuf[i];
+      makeMove(mv);
+      const bool legal = !attacked(kingSq[side ^ 1], side);
+      unmakeMove(mv);
+      if (legal) {
+        SearchResult drawn;
+        drawn.bestMove = mv;
+        drawn.bestMoveStr = moveToStr(mv);
+        drawn.score = 0;
+        drawn.depth = 1;
+        drawn.nodes = 0;
+        drawn.time = nowMs() - started;
+        drawn.pv.push_back(drawn.bestMoveStr);
+        if (threadId == 0) {
+          ostringstream line;
+          line << "info depth 1 score cp 0 nodes 0 time " << drawn.time
+               << " pv " << drawn.bestMoveStr;
+          emitInfo(line.str());
+        }
+        return drawn;
+      }
+    }
+  }
+
   SearchResult out;
   int prevScore = 0;
   uint32_t prevIterMove = 0;
@@ -1380,7 +1466,7 @@ static SearchResult search(const SearchOpts& rawOpts) {
            << " nps " << (nodes * 1000 / (u64)elapsed)
            << " time " << elapsed << " pv";
       for (auto& m : lastPv) line << " " << m;
-      emitInfo(line.str());
+      if (threadId == 0) emitInfo(line.str());
     }
 
     if (abs(res.score) > MATE - 100) break;
@@ -1472,6 +1558,122 @@ static bool applyUciMove(const string& mvStr) {
   return false;
 }
 
+// Each search thread has its own board, so replay the game in that thread's
+// state before searching. This preserves castling, en passant, repetition and
+// the fifty-move counter exactly as the main thread sees them.
+static void prepareThreadPosition(const string& fen, const vector<string>& moves) {
+  setFen(fen);
+  for (const string& mv : moves) applyUciMove(mv);
+}
+
+// ---------------------------------------------------------------------------
+// Opening book (generated from book.js by test/gen-native-book.js)
+// ---------------------------------------------------------------------------
+
+static uint64_t bookHash(const string& s) {
+  uint64_t h = 14695981039346656037ULL;
+  for (unsigned char c : s) {
+    h ^= (uint64_t)c;
+    h *= 1099511628211ULL;
+  }
+  return h;
+}
+
+// Same key as book.js: FEN board + side + castling, with no en-passant field.
+static string bookPositionKey() {
+  string s;
+  static const char* pieceChars = " PNBRQK";
+  for (int r = 7; r >= 0; r--) {
+    int empty = 0;
+    for (int f = 0; f < 8; f++) {
+      const int p = board[r * 16 + f];
+      if (!p) { empty++; continue; }
+      if (empty) { s += (char)('0' + empty); empty = 0; }
+      const char c = pieceChars[p & 7];
+      s += ((p >> 3) == WHITE) ? c : (char)tolower((unsigned char)c);
+    }
+    if (empty) s += (char)('0' + empty);
+    if (r) s += '/';
+  }
+  s += side == WHITE ? " w " : " b ";
+  if (!castling) s += '-';
+  else {
+    if (castling & 1) s += 'K';
+    if (castling & 2) s += 'Q';
+    if (castling & 4) s += 'k';
+    if (castling & 8) s += 'q';
+  }
+  return s;
+}
+
+static bool parseBoolValue(const string& v) {
+  string s = v;
+  for (char& c : s) c = (char)tolower((unsigned char)c);
+  return s == "true" || s == "1" || s == "on" || s == "yes";
+}
+
+static uint32_t bookPick() {
+  if (!ownBook || !bookAllowed || bookDepthPlies <= 0) return 0;
+  if (histLen - 1 >= bookDepthPlies) return 0;
+
+  const uint64_t h = bookHash(bookPositionKey());
+  uint32_t lo = 0, hi = bookdata::ENTRY_COUNT;
+  while (lo < hi) {
+    const uint32_t mid = (lo + hi) / 2;
+    if (bookdata::ENTRIES[mid].key < h) lo = mid + 1;
+    else hi = mid;
+  }
+  if (lo >= bookdata::ENTRY_COUNT || bookdata::ENTRIES[lo].key != h) return 0;
+  const bookdata::Entry& entry = bookdata::ENTRIES[lo];
+
+  // Resolve book moves to full legal encodings, keeping their weights.
+  struct Cand { uint32_t mv; int w; };
+  Cand cands[64];
+  int cn = 0, maxW = 0;
+  const int legalN = generateMoves(0, false);
+  for (uint32_t i = 0; i < entry.count; i++) {
+    const bookdata::Move& bm = bookdata::MOVES[entry.offset + i];
+    const int bf = bm.move & 127, bt = (bm.move >> 7) & 127, bp = (bm.move >> 14) & 7;
+    for (int j = 0; j < legalN; j++) {
+      const uint32_t mv = moveBuf[j];
+      if ((mv & 127) == bf && ((mv >> 7) & 127) == bt && ((mv >> 14) & 7) == bp) {
+        if (cn < 64) {
+          cands[cn].mv = mv;
+          cands[cn].w = bm.weight;
+          if (bm.weight > maxW) maxW = bm.weight;
+          cn++;
+        }
+        break;
+      }
+    }
+  }
+  if (!cn || maxW <= 0) return 0;
+
+  // Variety 0 keeps only the most popular book move; 100 keeps every named
+  // continuation, still weighted toward main lines.
+  const int cutoff = (int)((i64)maxW * (100 - bookVariety) / 100);
+  int total = 0;
+  for (int i = 0; i < cn; i++) {
+    if (cands[i].w < cutoff) cands[i].w = 0;
+    total += cands[i].w;
+  }
+  if (total <= 0) {
+    for (int i = 0; i < cn; i++) if (cands[i].w > 0) return cands[i].mv;
+    return cands[0].mv;
+  }
+
+  int r = (int)(bookRng() % (u64)total);
+  for (int i = 0; i < cn; i++) {
+    if (r < cands[i].w) return cands[i].mv;
+    r -= cands[i].w;
+  }
+  return cands[0].mv;
+}
+
+static const char* START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+static string gameFen = START_FEN;
+static vector<string> gameMoves;
+
 int main(int argc, char** argv) {
   initTables();
   for (int d = 0; d < MAX_PLY; d++) {
@@ -1481,7 +1683,7 @@ int main(int argc, char** argv) {
       LMR[d][m] = r < 1 ? 1 : r;
     }
   }
-  setFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+  setFen(START_FEN);
   resizeTT(hashMB);
 
   // Optional one-shot modes: `kiwa-native perft <d>` / `kiwa-native bench`
@@ -1520,11 +1722,16 @@ int main(int argc, char** argv) {
     if (cmd.empty()) continue;
 
     if (cmd == "uci") {
-      emitInfo("id name Kiwa 2.0.1 (native)");
+      emitInfo("id name KiwaChess 2.2.0");
       emitInfo("id author Kiwa");
+      emitInfo("id string core C++ native");
+      emitInfo("option name Threads type spin default 1 min 1 max 8");
       emitInfo("option name Hash type spin default 64 min 1 max 512");
-      emitInfo("option name Clear Hash type button");
+      emitInfo("option name OwnBook type check default true");
+      emitInfo("option name Book Depth type spin default 24 min 0 max 60");
+      emitInfo("option name Book Variety type spin default 100 min 0 max 100");
       emitInfo("option name Move Overhead type spin default 30 min 0 max 1000");
+      emitInfo("option name Clear Hash type button");
       emitInfo("uciok");
     } else if (cmd == "setoption") {
       // setoption name <name, spaces allowed> [value <value>]
@@ -1549,6 +1756,14 @@ int main(int argc, char** argv) {
           clearTT();
         } else if (name == "move overhead") {
           moveOverhead = max(0, min(1000, atoi(value.c_str())));
+        } else if (name == "ownbook") {
+          ownBook = parseBoolValue(value);
+        } else if (name == "book depth") {
+          bookDepthPlies = max(0, min(60, atoi(value.c_str())));
+        } else if (name == "book variety") {
+          bookVariety = max(0, min(100, atoi(value.c_str())));
+        } else if (name == "threads") {
+          threads = max(1, min(8, atoi(value.c_str())));
         }
       }
     } else if (cmd == "isready") {
@@ -1556,24 +1771,32 @@ int main(int argc, char** argv) {
     } else if (cmd == "ucinewgame") {
       stopSearch();
       clearTT();
+      setFen(START_FEN);
+      gameFen = START_FEN;
+      gameMoves.clear();
+      bookAllowed = false;
     } else if (cmd == "position") {
       stopSearch();
       string kind;
       iss >> kind;
       string fen;
+      bookAllowed = kind == "startpos";
       if (kind == "startpos") {
-        fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+        fen = START_FEN;
       } else if (kind == "fen") {
         string part;
         for (int i = 0; i < 6 && iss >> part; i++) fen += part + (i < 5 ? " " : "");
       }
       setFen(fen);
+      gameFen = fen;
+      gameMoves.clear();
       string token;
       while (iss >> token) {
         if (token == "moves") {
           string mvStr;
           while (iss >> mvStr) {
-            if (!applyUciMove(mvStr)) fprintf(stderr, "illegal move ignored: %s\n", mvStr.c_str());
+            if (applyUciMove(mvStr)) gameMoves.push_back(mvStr);
+            else fprintf(stderr, "illegal move ignored: %s\n", mvStr.c_str());
           }
           break;
         }
@@ -1593,15 +1816,81 @@ int main(int argc, char** argv) {
         else if (token == "movetime") iss >> o.movetime;
         else if (token == "infinite") o.infinite = true;
       }
+      // Book replies are instant. Explicit depth/node/infinite searches are
+      // analysis requests, so the book stays out of those.
+      if (ownBook && bookAllowed && !o.depth && !o.nodeBudget && !o.infinite) {
+        const uint32_t bm = bookPick();
+        if (bm) {
+          const string mv = moveToStr(bm);
+          emitInfo("info depth 1 score cp 15 nodes 1 time 0 pv " + mv);
+          emitInfo("bestmove " + mv);
+          continue;
+        }
+      }
       if (searchThread.joinable()) searchThread.join();
       abortFlag.store(false);
-      searchThread = thread([o]() {
-        SearchResult r = search(o);
-        {
+      const string fen = gameFen;
+      const vector<string> moves = gameMoves;
+      const int nthreads = threads;
+      searchThread = thread([o, fen, moves, nthreads]() {
+        if (nthreads <= 1) {
+          threadId = 0;
+          ttOffset = 0;
+          ttSegMask = (size_t)-1;
+          prepareThreadPosition(fen, moves);
+          SearchResult r = search(o);
           lock_guard<mutex> lock(outMutex);
           printf("bestmove %s\n", r.bestMoveStr.c_str());
           fflush(stdout);
+          return;
         }
+
+        // Split the advertised Hash into private, power-of-two slices.
+        size_t seg = 1024;
+        while (seg * 2 * (size_t)nthreads <= ttSize) seg *= 2;
+
+        vector<SearchResult> results((size_t)nthreads);
+        vector<thread> pool;
+        pool.reserve((size_t)nthreads);
+        for (int i = 0; i < nthreads; i++) {
+          pool.emplace_back([&, i]() {
+            threadId = i;
+            ttOffset = (size_t)i * seg;
+            ttSegMask = seg - 1;
+            prepareThreadPosition(fen, moves);
+            results[(size_t)i] = search(o);
+          });
+        }
+        for (auto& t : pool) t.join();
+
+        auto mateState = [](int sc) {
+          return sc > MATE - 100 ? 1 : (sc < -MATE + 100 ? -1 : 0);
+        };
+        int bi = 0;
+        for (int i = 1; i < nthreads; i++) {
+          const SearchResult& r = results[(size_t)i];
+          const SearchResult& b = results[(size_t)bi];
+          const int ms = mateState(r.score), bs = mateState(b.score);
+          bool better;
+          if (ms != bs) better = ms > bs;
+          else if (r.depth != b.depth) better = r.depth > b.depth;
+          else if (r.score != b.score) better = r.score > b.score;
+          else better = r.nodes > b.nodes;
+          if (better) bi = i;
+        }
+        const SearchResult& best = results[(size_t)bi];
+
+        lock_guard<mutex> lock(outMutex);
+        if (bi != 0) {
+          ostringstream info;
+          info << "info depth " << best.depth << " score " << scoreToUci(best.score)
+               << " nodes " << best.nodes << " time " << best.time << " pv";
+          if (best.pv.empty()) info << " " << best.bestMoveStr;
+          else for (auto& m : best.pv) info << " " << m;
+          printf("%s\n", info.str().c_str());
+        }
+        printf("bestmove %s\n", best.bestMoveStr.c_str());
+        fflush(stdout);
       });
     } else if (cmd == "stop") {
       abortFlag.store(true);
