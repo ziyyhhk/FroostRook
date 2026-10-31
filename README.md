@@ -471,7 +471,7 @@ node test/wac-native.js nodes=100000 300     # load-proof tactical accuracy
 node test/wac-native.js 300 300             # at a fixed time per move
 node test/wac-native.js 1000 300            # 1 s/move
 node test/thread-bench.js 1,2,4,8           # thread scaling
-node test/eval-ab.js .build/base220.exe .build/KiwaChess.exe
+node test/eval-ab.js .build/base220.exe native/kiwa-native.exe
 node test/openings-native.js 30 6           # personalities, memory, seeds
 node test/book-check.js
 node test/book-fallback.js                  # the JavaScript front-end path
