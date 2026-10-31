@@ -44,6 +44,15 @@ jobs:
           out2=$(printf 'position fen 7k/5Q2/6K1/8/8/8/8/8 b - - 0 1\ngo depth 2\nquit\n' | native/KiwaChess.exe)
           echo "$out2" | grep -q 'bestmove 0000'
 
+      - name: Node regression tests
+        shell: bash
+        run: |
+          node test/book-check.js
+          node test/rules.js
+          node test/prediction.js
+          node test/uci-smoke.js
+          node test/openings-native.js 20 6
+
       - uses: actions/upload-artifact@v4
         with:
           name: KiwaChess-windows-x64

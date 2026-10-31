@@ -4,6 +4,7 @@
  * Scores the native engine on the Win at Chess (WAC) suite.
  * Uses the JS engine only to convert WAC's SAN "bm" to UCI moves.
  *   node test/wac-native.js [ms-per-position] [limit]
+ *   node test/wac-native.js nodes=100000 [limit]   (deterministic, load-proof)
  */
 
 const fs = require('fs');
@@ -13,8 +14,16 @@ const native = require('../native');
 
 engine.setInfoHandler(() => {});
 
-const ms = +(process.argv[2] || 300);
-const limit = +(process.argv[3] || 300);
+let ms = 300;
+let limit = 300;
+let fixedNodes = 0;
+const nums = [];
+for (const a of process.argv.slice(2)) {
+  if (a.startsWith('nodes=')) fixedNodes = +(a.slice(6) || 0);
+  else if (a !== '') nums.push(+a);
+}
+if (nums.length) ms = nums[0];
+if (nums.length > 1) limit = nums[1];
 
 // Same SAN matcher as test/wac.js (needs the JS engine's legal move list).
 function sanToUci(san) {
@@ -93,7 +102,7 @@ async function main() {
     const want = sanToUci(bm);
     if (!want) { unparsed++; continue; }
 
-    const r = await native.search(fen, { movetime: ms });
+    const r = await native.search(fen, fixedNodes ? { nodes: fixedNodes } : { movetime: ms });
     tested++;
     if (r.bestMoveStr === want) solved++;
     else misses.push({ id: idx + 1, bm, want, got: r.bestMoveStr, score: r.score });
@@ -104,7 +113,8 @@ async function main() {
     }
   }
 
-  console.log(`\nWAC native @ ${ms}ms/move: ${solved}/${tested} = ${(100 * solved / tested).toFixed(1)}%`);
+  const label = fixedNodes ? `${fixedNodes} nodes/move` : `${ms}ms/move`;
+  console.log(`\nWAC native @ ${label}: ${solved}/${tested} = ${(100 * solved / tested).toFixed(1)}%`);
   console.log(`unparsed positions: ${unparsed}`);
   console.log('misses (first 15):');
   for (const m of misses.slice(0, 15)) {

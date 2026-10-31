@@ -315,7 +315,9 @@ function setFen(fen) {
   fullmove = parts[5] ? parseInt(parts[5], 10) || 1 : 1;
 
   h1 ^= ZC1[castling]; h2 ^= ZC2[castling];
-  if (epSq >= 0) { h1 ^= ZE1[epSq & 7]; h2 ^= ZE2[epSq & 7]; }
+  // FENs often carry an ep square after every double push; hash it only when
+  // the capture is legal so repetition identity matches FIDE 9.2.2.
+  if (epSq >= 0 && epCapturePossible(side)) { h1 ^= ZE1[epSq & 7]; h2 ^= ZE2[epSq & 7]; }
   if (side === BLACK) { h1 ^= ZS1; h2 ^= ZS2; }
 
   posH1[0] = h1; posH2[0] = h2;
@@ -378,6 +380,36 @@ function isAttacked(sq, by) {
       }
       s += d;
     }
+  }
+  return false;
+}
+
+// An en-passant square only distinguishes positions when a legal en-passant
+// capture actually exists (FIDE 9.2.2). Merely having a pawn next to it is not
+// enough: the capture may expose the king.
+function epCapturePossible(by) {
+  if (epSq < 0 || board[epSq] !== 0) return false;
+  // The capturing pawn stands one rank on the capturer's side of the ep
+  // target; the captured pawn stands on the target's far side.
+  const pawnRank = epSq + (by === WHITE ? -16 : 16);
+  const capSq = pawnRank;
+  if (capSq & 0x88) return false;
+  if (board[capSq] !== pc(by ^ 1, PAWN)) return false;
+  for (let df = -1; df <= 1; df += 2) {
+    const from = pawnRank + df;
+    if (from & 0x88) continue;
+    if (board[from] !== pc(by, PAWN)) continue;
+    const savedFrom = board[from];
+    const savedTo = board[epSq];
+    const savedCap = board[capSq];
+    board[from] = 0;
+    board[capSq] = 0;
+    board[epSq] = pc(by, PAWN);
+    const legal = !isAttacked(kingSq[by], by ^ 1);
+    board[from] = savedFrom;
+    board[capSq] = savedCap;
+    board[epSq] = savedTo;
+    if (legal) return true;
   }
   return false;
 }
@@ -574,7 +606,7 @@ function makeMove(mv) {
   stCap[st] = 0;
 
   h1 ^= ZC1[castling]; h2 ^= ZC2[castling];
-  if (epSq >= 0) { h1 ^= ZE1[epSq & 7]; h2 ^= ZE2[epSq & 7]; }
+  if (epSq >= 0 && epCapturePossible(side)) { h1 ^= ZE1[epSq & 7]; h2 ^= ZE2[epSq & 7]; }
 
   const us = side, them = us ^ 1;
   const moving = board[from];
@@ -625,7 +657,7 @@ function makeMove(mv) {
   epSq = (flags & F_DOUBLE) ? (from + (us === WHITE ? 16 : -16)) : -1;
 
   h1 ^= ZC1[castling]; h2 ^= ZC2[castling];
-  if (epSq >= 0) { h1 ^= ZE1[epSq & 7]; h2 ^= ZE2[epSq & 7]; }
+  if (epSq >= 0 && epCapturePossible(them)) { h1 ^= ZE1[epSq & 7]; h2 ^= ZE2[epSq & 7]; }
   h1 ^= ZS1; h2 ^= ZS2;
 
   if (us === BLACK) fullmove++;
@@ -684,7 +716,7 @@ function makeNull() {
   stH2[st] = h2;
   stCap[st] = 0;
 
-  if (epSq >= 0) { h1 ^= ZE1[epSq & 7]; h2 ^= ZE2[epSq & 7]; }
+  if (epSq >= 0 && epCapturePossible(side)) { h1 ^= ZE1[epSq & 7]; h2 ^= ZE2[epSq & 7]; }
   epSq = -1;
   halfmove++;
   h1 ^= ZS1; h2 ^= ZS2;
@@ -905,6 +937,18 @@ function isRepetition() {
   return false;
 }
 
+// A claimable threefold: the current position plus two earlier identical
+// occurrences within the reversible window. Search uses isRepetition() above to
+// break cycles, but a single repetition is not a draw.
+function isThreefold() {
+  const stop = Math.max(0, histLen - 1 - halfmove);
+  let seen = 0;
+  for (let i = histLen - 3; i >= stop; i -= 2) {
+    if (posH1[i] === h1 && posH2[i] === h2 && ++seen >= 2) return true;
+  }
+  return false;
+}
+
 // Dead position (FIDE 5.2.2): no legal sequence can produce mate. Pawns,
 // rooks and queens can always mate in principle, so their presence settles it.
 function isInsufficientMaterial() {
@@ -942,7 +986,7 @@ function isStalemate() {
 }
 
 function isDraw() {
-  return isStalemate() || isInsufficientMaterial() || halfmove >= 100 || isRepetition();
+  return isStalemate() || isInsufficientMaterial() || halfmove >= 100 || isThreefold();
 }
 
 function moveScore(mv, ttMove, ply, prevMv) {
@@ -1008,6 +1052,7 @@ function quiesce(alpha, beta, ply, inCheck) {
   const n = generateMoves(base, !inCheck);
   for (let i = 0; i < n; i++) scoreBuf[base + i] = moveScore(moveBuf[base + i], 0, ply, 0);
 
+  let legal = 0;
   for (let i = 0; i < n; i++) {
     const mv = pickMove(base, n, i);
     const flags = mv & (F_CAP | F_EP | F_CASTLE | F_DOUBLE);
@@ -1021,6 +1066,7 @@ function quiesce(alpha, beta, ply, inCheck) {
 
     makeMove(mv);
     if (isAttacked(kingSq[side ^ 1], side)) { unmakeMove(mv); continue; }
+    legal++;
 
     const givesCheck = isAttacked(kingSq[side], side ^ 1);
     const sc = -quiesce(-beta, -alpha, ply + 1, givesCheck);
@@ -1035,6 +1081,8 @@ function quiesce(alpha, beta, ply, inCheck) {
       }
     }
   }
+  // In check with no legal evasion the position is mate, not a leaf eval.
+  if (inCheck && legal === 0) return -MATE + ply;
   return best;
 }
 
@@ -1246,6 +1294,10 @@ function rootSearch(depth, alpha, beta) {
     }
   }
 
+  // No legal move at the root: distinguish checkmate (-MATE) from stalemate
+  // (0). Leaving -INF here would not be a legal UCI score or game result.
+  if (legal === 0) bestScore = isAttacked(kingSq[side], side ^ 1) ? -MATE : 0;
+
   return { score: bestScore, move: bestMove, legal };
 }
 
@@ -1360,8 +1412,19 @@ function search(opts = {}) {
     }
     if (searchStop && d > 1) break;
     if (res.legal === 0) {
-      rootScore = res.score;
-      rootBest = 0;
+      // A timeout can leave legal at 0 before a first root move completes, so
+      // only report a terminal score when the position really has none.
+      if (getLegalMoves().length === 0) {
+        rootScore = res.score;
+        rootBest = 0;
+        rootDepth = 1;
+        if (infoHandler) {
+          const elapsed = Math.max(1, Date.now() - started);
+          infoHandler(
+            `info depth 1 score ${scoreToUci(res.score)} nodes ${nodes} nps ${Math.round(nodes * 1000 / elapsed)} time ${elapsed}`
+          );
+        }
+      }
       break;
     }
     prevScore = res.score;
@@ -1548,12 +1611,72 @@ function movePrior(mv, givesCheck, isCastle, opening) {
   return p;
 }
 
+// Feature flags for the human-move model are computed by predict-model.js,
+// which walks the board through this context. engine.js hands it make/unmake
+// instead of applyUciMove/setFen so that running a prediction can never destroy
+// the move history the repetition and fifty-move rules read.
+function makeFlagContext(legalInts) {
+  let undo = 0;
+  return {
+    describeMove, getFen, inCheck, getLegalMoves, moveToStr, WHITE,
+    get side() { return side; },
+    get kingSq() { return kingSq; },
+    applyUciMove(uci) {
+      const mv = legalInts.find(m => moveToStr(m) === uci);
+      if (mv === undefined) return false;
+      undo = mv;
+      makeMove(mv);
+      return true;
+    },
+    setFen() {
+      if (undo) { unmakeMove(undo); undo = 0; }
+    },
+  };
+}
+
+// The blend lives here so test/fit-predict.js can re-fit it on training data
+// without re-running the search for every candidate weight.
+function blendAndRank(results, cfg) {
+  const capScore = sc => Math.max(-1500, Math.min(1500, sc));
+  const blended = r =>
+    capScore(r.score) * cfg.searchWeight +
+    (r.logp !== undefined ? cfg.priorWeight * r.logp : r.prior * cfg.priorScale);
+
+  let maxB = -Infinity;
+  for (const r of results) maxB = Math.max(maxB, blended(r));
+  let total = 0;
+  for (const r of results) { r.p = Math.exp((blended(r) - maxB) / cfg.temperature); total += r.p; }
+  for (const r of results) r.p /= total;
+  results.sort((a, b) => b.p - a.p);
+  return results;
+}
+
 function predict(opts = {}) {
   const depth = opts.depth || 5;
   const budget = opts.movetime || 3000;
   const usePrior = opts.prior !== false;
-  const temperature = opts.temperature === undefined ? 30 : opts.temperature;
+
+  // Data-driven prior (predict-model.js + data/human-priors.json). Loaded
+  // lazily: the engine works with the model files absent, and requiring the
+  // book/model at module load would tie every caller to them.
+  let model = null, bookData = null;
+  // The model is independent of the hand-written structural prior: `prior:false`
+  // must still allow a raw, model-scored ranking (test/fit-predict.js relies on
+  // that to fit the blend without the structural terms).
+  if (opts.model !== false) {
+    try {
+      model = require('./predict-model.js');
+      if (!model.available()) model = null;
+    } catch (err) { model = null; }
+    if (model) {
+      try { bookData = require('./book.js').BOOK; } catch (err) { bookData = null; }
+    }
+  }
+  const mw = model ? model.getWeights() : null;
+  const temperature = opts.temperature === undefined ? (mw ? mw.temperature : 30) : opts.temperature;
   const priorScale = opts.priorScale === undefined ? 1 : opts.priorScale;
+  const priorWeight = opts.priorWeight === undefined ? (mw ? mw.priorWeight : 0) : opts.priorWeight;
+  const searchWeight = opts.searchWeight === undefined ? (mw ? mw.searchWeight : 1) : opts.searchWeight;
 
   const now = Date.now();
   hardStop = now + budget;
@@ -1563,6 +1686,7 @@ function predict(opts = {}) {
   nodes = 0;
 
   const opening = fullmove <= 12;
+  const beforeFen = getFen();
   const legal = getLegalMoves();
   const results = [];
 
@@ -1575,7 +1699,9 @@ function predict(opts = {}) {
     if (searchStop) break;
 
     const flags = mv & (F_CAP | F_EP | F_CASTLE | F_DOUBLE);
-    const prior = usePrior ? movePrior(mv, givesCheck, !!(flags & F_CASTLE), opening) : 0;
+    // With the trained model the hand-written structural prior is redundant:
+    // capture / check / castling / development are features of the model.
+    const prior = model ? 0 : (usePrior ? movePrior(mv, givesCheck, !!(flags & F_CASTLE), opening) : 0);
     results.push({ mv, score: sc, prior });
   }
 
@@ -1584,35 +1710,44 @@ function predict(opts = {}) {
     if (!results.some(r => r.mv === mv)) results.push({ mv, score: -2000, prior: 0 });
   }
 
-  const capScore = sc => Math.max(-1500, Math.min(1500, sc));
-  const blended = r => capScore(r.score) + (usePrior ? r.prior * priorScale : 0);
-
-  let maxB = -Infinity;
-  for (const r of results) maxB = Math.max(maxB, blended(r));
-
-  let total = 0;
-  for (const r of results) {
-    r.p = Math.exp((blended(r) - maxB) / temperature);
-    total += r.p;
+  let source = model ? 'backoff' : 'hand';
+  if (model) {
+    const legalInts = results.map(r => r.mv);
+    const bookKey = beforeFen.split(' ').slice(0, 3).join(' ');
+    // Only this position's book rows are needed for the `inBook` feature.
+    const bookTable = new Map();
+    if (bookData && bookData[bookKey]) bookTable.set(bookKey, new Set(bookData[bookKey].map(r => r[0])));
+    const lp = model.logPrior(makeFlagContext(legalInts), beforeFen, legalInts,
+                               legalInts.map(m => moveToStr(m)), bookTable,
+                               opts.loo ? new Map([[opts.loo, 1]]) : null);
+    if (lp) {
+      for (let i = 0; i < results.length; i++) results[i].logp = lp.logp[i];
+      source = lp.source;
+    } else {
+      model = null;
+    }
   }
-  for (const r of results) r.p /= total;
 
-  results.sort((a, b) => b.p - a.p);
+  const ranked = blendAndRank(results, {
+    searchWeight, priorWeight, priorScale, temperature,
+  });
 
-  const top = results.slice(0, opts.top || 5).map(r => ({
+  const top = ranked.slice(0, opts.top || 5).map(r => ({
     move: moveToStr(r.mv),
     prob: r.p,
     score: r.score,
     prior: r.prior,
+    logp: r.logp,
   }));
 
   return {
-    moves: top,
+    moves: opts.raw ? ranked.map(r => ({ move: moveToStr(r.mv), score: r.score, prior: r.prior, logp: r.logp })) : top,
     best: top.length ? top[0].move : null,
     confidence: top.length ? top[0].prob : 0,
     depth,
     time: Date.now() - now,
     searched: results.length,
+    priorSource: model ? source : 'hand',
   };
 }
 
@@ -1705,6 +1840,18 @@ function getFen() {
   return out;
 }
 
+function previewKeyAfter(uci) {
+  if (typeof uci !== 'string') return null;
+  for (const mv of getLegalMoves()) {
+    if (moveToStr(mv) !== uci) continue;
+    makeMove(mv);
+    const fen = getFen();
+    unmakeMove(mv);
+    return fen.split(' ').slice(0, 3).join(' ');
+  }
+  return null;
+}
+
 function applyMoveInt(mv) {
   makeMove(mv);
 }
@@ -1730,8 +1877,9 @@ module.exports = {
   setFen, applyUciMove, getLegalMoves, moveToStr, boardAscii,
   search, predict, perft, evaluate, inCheck,
   isCheckmate, isStalemate, isInsufficientMaterial, isDraw,
+  isRepetition, isThreefold, epCapturePossible,
   setInfoHandler, clearTT, hasNonPawn,
-  randomMove, greedyMove, getFen, applyMoveInt, describeMove,
+  randomMove, greedyMove, getFen, applyMoveInt, describeMove, previewKeyAfter,
   get side() { return side; },
   get halfmove() { return halfmove; },
   get fullmove() { return fullmove; },

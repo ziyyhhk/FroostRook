@@ -1,19 +1,27 @@
 'use strict';
 
 /*
- * Anchored Elo measurement: Kiwa native vs Stockfish with UCI_LimitStrength.
+ * Strength measurement with two modes.
  *
- *   node test/elo.js --anchor 2000 --ms 100 --pairs 5
- *                      [--stockfish <path>] [--pgn <file>]
+ * 1. Anchored (default): Kiwa vs Stockfish at `UCI_LimitStrength` /
+ *    `UCI_Elo <anchor>`. Both engines get the same fixed movetime.
+ *      node test/elo.js --anchor 2000 --ms 100 --pairs 5
+ *                         [--stockfish <path>] [--pgn <file>] [--kiwa <exe>]
  *
- * Stockfish is set to `UCI_Elo <anchor>` and both engines get the same fixed
- * movetime. Each opening is played twice (colours swapped), so the result is
- * Kiwa's score against an opponent nominally rated `anchor` at this time
- * control. Performance Elo = anchor + 400*log10(score/(1-score)).
+ * 2. Duel: two engine binaries against each other, used to measure an
+ *    old-vs-new difference under identical conditions.
+ *      node test/elo.js --pairs 50 --ms 100 --book false \
+ *                         --kiwa /tmp/kiwa-new.exe --opp /tmp/kiwa-old.exe
  *
- * The 1-sigma error is 173.7 / sqrt(n * score * (1-score)). That only covers
- * sampling noise; Stockfish's own UCI_Elo calibration is the dominant unknown,
- * so read the result as "roughly this strong", not a CCRL rating.
+ * Each opening is played twice with the colours swapped, so the result is a
+ * paired sample. Performance Elo = anchor + 400*log10(score/(1-score)); the
+ * difference between two engines is 400*log10(p/(1-p)). The 1-sigma error is
+ * 173.7 / sqrt(n * p * (1-p)) and covers sampling noise only. Stockfish's own
+ * UCI_Elo calibration is a separate, dominant unknown, so an anchored number
+ * means "roughly this strong on this scale", not a CCRL rating.
+ *
+ * Openings are reused in cycles when --pairs exceeds the built-in list; the
+ * colour swap stays per pair, so the sample stays paired.
  *
  * Adjudication is deliberately boring: checkmate, stalemate, threefold,
  * 50-move rule, dead-material draw, or a 300-ply cap (draw).
@@ -51,9 +59,16 @@ function arg(name, def) {
 
 const ANCHOR = Math.max(1320, Math.min(3190, +(arg('anchor', 2000))));
 const MS = Math.max(10, +(arg('ms', 100)));
-const PAIRS = Math.max(1, Math.min(OPENINGS.length, +(arg('pairs', 5))));
+const PAIRS = Math.max(1, Math.min(120, +(arg('pairs', 5))));
 const SF_EXE = arg('stockfish', process.env.STOCKFISH || 'stockfish');
 const PGN_FILE = arg('pgn', null);
+const KIWA_EXE = arg('kiwa', process.env.KIWA_NATIVE || path.join(__dirname, '..', 'native', 'kiwa-native.exe'));
+// --opp makes this a duel between two binaries instead of an anchored match.
+const OPP_EXE = arg('opp', process.env.OPP_NATIVE || null);
+const DUEL = !!OPP_EXE;
+// Books hide search differences. Default a duel to no books; an anchored
+// measurement keeps the book because that is how the engine actually plays.
+const USE_BOOK = !/^(false|0|off|no)$/i.test(arg('book', DUEL ? 'false' : 'true'));
 
 class UciEngine {
   constructor(label, exe) {
@@ -64,6 +79,7 @@ class UciEngine {
     this.name = label;
     this.lineWaiters = [];
     this.searchWaiters = [];
+    this.lastInfo = null;
     this.closing = false;
   }
 
@@ -104,6 +120,18 @@ class UciEngine {
 
   _onLine(line) {
     if (line.startsWith('id name ')) this.name = line.slice(8).trim();
+    if (line.startsWith('info depth ')) {
+      const d = line.match(/info depth (\d+)/);
+      const n = line.match(/nodes (\d+)/);
+      // Keep the deepest reported iteration; that is the one the bestmove
+      // comes from. No claim about the engine internals beyond what it sent.
+      if (d) {
+        const depth = +d[1];
+        if (!this.lastInfo || depth >= this.lastInfo.depth) {
+          this.lastInfo = { depth, nodes: n ? +n[1] : 0 };
+        }
+      }
+    }
     if (line.startsWith('bestmove')) {
       const w = this.searchWaiters.shift();
       if (w) {
@@ -165,6 +193,7 @@ class UciEngine {
         if (i >= 0) this.searchWaiters.splice(i, 1);
         reject(new Error(`${this.label}: no bestmove after ${ms} ms`));
       }, ms + SEARCH_TIMEOUT_MS);
+      this.lastInfo = null;
       this.searchWaiters.push({ resolve, reject, timer });
       this.send('position ' + position);
       this.send('go movetime ' + ms);
@@ -260,6 +289,11 @@ async function playGame(kiwa, sf, opening, kiwaIsWhite, gameNo) {
   let result = null;   // 1 Kiwa win, 0.5 draw, 0 Kiwa loss
   let reason = '';
   const t0 = Date.now();
+  // Search depth/nodes as reported by each engine itself, per side.
+  const stats = {
+    kiwa: { depths: [], nodes: 0, moves: 0 },
+    opp: { depths: [], nodes: 0, moves: 0 },
+  };
 
   for (let ply = 0; ply < MAX_PLIES; ply++) {
     const legal = engine.getLegalMoves();
@@ -289,6 +323,12 @@ async function playGame(kiwa, sf, opening, kiwaIsWhite, gameNo) {
       reason = `${mover.label} failure: ${e.message}`;
       break;
     }
+    const sideStats = kiwaToMove ? stats.kiwa : stats.opp;
+    sideStats.moves++;
+    if (mover.lastInfo) {
+      sideStats.depths.push(mover.lastInfo.depth);
+      sideStats.nodes += mover.lastInfo.nodes;
+    }
     const mvInt = mv && mv !== '0000'
       ? engine.getLegalMoves().find(m => engine.moveToStr(m) === mv)
       : undefined;
@@ -307,7 +347,7 @@ async function playGame(kiwa, sf, opening, kiwaIsWhite, gameNo) {
 
   if (result === null) { result = 0.5; reason = 'unfinished'; }
   return {
-    result, reason, moves, sanMoves,
+    result, reason, moves, sanMoves, stats,
     plies: moves.length,
     seconds: (Date.now() - t0) / 1000,
     kiwaIsWhite,
@@ -315,6 +355,9 @@ async function playGame(kiwa, sf, opening, kiwaIsWhite, gameNo) {
              : result === 0 ? (kiwaIsWhite ? '0-1' : '1-0') : '1/2-1/2',
   };
 }
+
+// Filled in after the handshake so the PGN names the real engines.
+const NAMES = { kiwa: 'Kiwa', opp: 'Opponent' };
 
 function movesToPgn(game, openingName) {
   const list = game.sanMoves || game.moves;
@@ -325,34 +368,44 @@ function movesToPgn(game, openingName) {
     const black = list[i + 1];
     body.push(`${n}. ${white}${black ? ' ' + black : ''}`);
   }
-  return `[Event "Kiwa Elo measurement"]\n[Site "local"]\n[White "${game.kiwaIsWhite ? 'Kiwa' : 'Stockfish (limited)'}"]\n` +
-         `[Black "${game.kiwaIsWhite ? 'Stockfish (limited)' : 'Kiwa'}"]\n` +
-         `[Result "${game.pgnResult}"]\n[Opening "${openingName}"]\n[Termination "${game.reason}"]\n\n` +
+  return `[Event "${DUEL ? 'Kiwa engine duel' : 'Kiwa Elo measurement'}"]\n[Site "local"]\n` +
+         `[White "${game.kiwaIsWhite ? NAMES.kiwa : NAMES.opp}"]\n` +
+         `[Black "${game.kiwaIsWhite ? NAMES.opp : NAMES.kiwa}"]\n` +
+         `[Result "${game.pgnResult}"]\n[Opening "${openingName}"]\n` +
+         `[TimeControl "${MS}/1 (movetime)"]\n[Termination "${game.reason}"]\n\n` +
          body.join(' ') + ' ' + game.pgnResult + '\n';
 }
 
 (async () => {
-  if (!fs.existsSync(SF_EXE) && !/stockfish/i.test(path.basename(SF_EXE))) {
+  if (!fs.existsSync(KIWA_EXE)) throw new Error(`engine binary not found: ${KIWA_EXE}`);
+  if (DUEL && !fs.existsSync(OPP_EXE)) throw new Error(`opponent binary not found: ${OPP_EXE}`);
+  if (!DUEL && !fs.existsSync(SF_EXE) && !/stockfish/i.test(path.basename(SF_EXE))) {
     throw new Error('Stockfish not found: ' + SF_EXE + ' (use --stockfish PATH or STOCKFISH env)');
   }
-  if (!fs.existsSync(path.join(__dirname, '..', 'native', 'kiwa-native.exe'))) {
-    throw new Error('native/kiwa-native.exe missing — build it first (npm run build:native)');
+
+  const kiwa = new UciEngine('Kiwa', KIWA_EXE);
+  const sf = new UciEngine(DUEL ? 'Opponent' : 'Stockfish', DUEL ? OPP_EXE : SF_EXE);
+
+  await kiwa.handshake(Object.assign({ Hash: 64, 'Move Overhead': 30 },
+                                     USE_BOOK ? {} : { OwnBook: 'false' }));
+  if (DUEL) {
+    await sf.handshake({ Hash: 64, 'Move Overhead': 30, ...(USE_BOOK ? {} : { OwnBook: 'false' }) });
+  } else {
+    await sf.handshake({
+      Threads: 1,
+      Hash: 16,
+      UCI_LimitStrength: 'true',
+      UCI_Elo: ANCHOR,
+    });
   }
+  NAMES.kiwa = kiwa.name;
+  NAMES.opp = sf.name;
 
-  const kiwa = new UciEngine('Kiwa', path.join(__dirname, '..', 'native', 'kiwa-native.exe'));
-  const sf = new UciEngine('Stockfish', SF_EXE);
-
-  await kiwa.handshake({ Hash: 64, 'Move Overhead': 30 });
-  await sf.handshake({
-    Threads: 1,
-    Hash: 16,
-    UCI_LimitStrength: 'true',
-    UCI_Elo: ANCHOR,
-  });
-
-  console.log(`Kiwa Elo measurement`);
-  console.log(`opponent   ${sf.name}, UCI_LimitStrength, UCI_Elo ${ANCHOR}`);
-  console.log(`engine     ${kiwa.name}`);
+  console.log(DUEL ? 'Kiwa engine duel' : 'Kiwa Elo measurement');
+  console.log(`engine     ${kiwa.name}  (${KIWA_EXE})`);
+  console.log(`opponent   ${sf.name}  (${OPP_EXE || SF_EXE})` +
+              (DUEL ? '' : `, UCI_LimitStrength, UCI_Elo ${ANCHOR}`));
+  console.log(`book       ${USE_BOOK ? 'on' : 'off'}`);
   console.log(`format     ${PAIRS} opening pairs = ${PAIRS * 2} games, ${MS} ms/move, colours swapped`);
   console.log('');
 
@@ -361,8 +414,9 @@ function movesToPgn(game, openingName) {
   let score = 0, wins = 0, draws = 0, losses = 0;
 
   for (let p = 0; p < PAIRS; p++) {
-    const opening = OPENINGS[p];
-    const name = opening.join(' ');
+    const opening = OPENINGS[p % OPENINGS.length];
+    const cycle = Math.floor(p / OPENINGS.length);
+    const name = opening.join(' ') + (cycle ? ` (cycle ${cycle + 1})` : '');
     console.log(`pair ${p + 1}: ${name}`);
     for (let k = 0; k < 2; k++) {
       const kiwaIsWhite = k === 0;
@@ -385,14 +439,58 @@ function movesToPgn(game, openingName) {
   console.log('');
   console.log(`Kiwa score ${score}/${n}  (+${wins} =${draws} -${losses}) = ${pct}%`);
 
+  const asWhite = games.filter(g => g.kiwaIsWhite);
+  const asBlack = games.filter(g => !g.kiwaIsWhite);
+  const half = (list, label) => {
+    if (!list.length) return;
+    const s = list.reduce((a, g) => a + g.result, 0);
+    const w = list.filter(g => g.result === 1).length;
+    const d = list.filter(g => g.result === 0.5).length;
+    const l = list.filter(g => g.result === 0).length;
+    console.log(`  as ${label.padEnd(5)} ${s}/${list.length} (${(100 * s / list.length).toFixed(1)}%)  +${w} =${d} -${l}`);
+  };
+  half(asWhite, 'White');
+  half(asBlack, 'Black');
+
+  const mean = list => (list.reduce((a, b) => a + b, 0) / (list.length || 1));
+  const summary = (s, label) => {
+    if (!s.moves) return;
+    console.log(`  ${label}: mean reported depth ${mean(s.depths).toFixed(1)}, ` +
+                `${Math.round(mean([s.nodes / s.moves])).toLocaleString()} nodes/move over ${s.moves} moves`);
+  };
+  const agg = { kiwa: { depths: [], nodes: 0, moves: 0 }, opp: { depths: [], nodes: 0, moves: 0 } };
+  for (const g of games) {
+    agg.kiwa.depths.push(...g.stats.kiwa.depths);
+    agg.kiwa.nodes += g.stats.kiwa.nodes;
+    agg.kiwa.moves += g.stats.kiwa.moves;
+    agg.opp.depths.push(...g.stats.opp.depths);
+    agg.opp.nodes += g.stats.opp.nodes;
+    agg.opp.moves += g.stats.opp.moves;
+  }
+  summary(agg.kiwa, NAMES.kiwa);
+  summary(agg.opp, NAMES.opp);
+  const reasons = {};
+  for (const g of games) reasons[g.reason] = (reasons[g.reason] || 0) + 1;
+  console.log(`  outcomes: ${Object.entries(reasons).map(([k, v]) => `${k} x${v}`).join(', ')}`);
+  console.log(`  mean game length ${(mean(games.map(g => g.plies))).toFixed(1)} plies, ` +
+              `${mean(games.map(g => g.seconds)).toFixed(1)} s wall (this machine was under other load)`);
+
   if (score > 0 && score < n) {
     const p = score / n;
-    const elo = ANCHOR + 400 * Math.log10(p / (1 - p));
     const err = 173.7 / Math.sqrt(n * p * (1 - p));
-    console.log(`performance Elo ${Math.round(elo)} vs anchor ${ANCHOR}  (±${Math.round(err)} 1σ sampling, n=${n})`);
-    console.log(`Note: the anchor's own calibration and this fast time control are not included in the error.`);
+    if (DUEL) {
+      const diff = 400 * Math.log10(p / (1 - p));
+      console.log(`Elo difference vs ${NAMES.opp}: ${diff >= 0 ? '+' : ''}${Math.round(diff)} ` +
+                  `(±${Math.round(err)} 1σ sampling, n=${n})`);
+    } else {
+      const elo = ANCHOR + 400 * Math.log10(p / (1 - p));
+      console.log(`performance Elo ${Math.round(elo)} vs anchor ${ANCHOR}  ` +
+                  `(±${Math.round(err)} 1σ sampling, n=${n})`);
+      console.log(`difference vs the anchor itself: ${Math.round(elo - ANCHOR)} (same ±${Math.round(err)})`);
+      console.log('Note: the anchor\'s own calibration and this fast time control are not included in the error.');
+    }
   } else {
-    console.log(`Score is ${score === n ? 'perfect' : 'zero'} — engine is at least ${score === n ? 'above' : 'below'} the anchor; rerun with a ${score === n ? 'higher' : 'lower'} --anchor.`);
+    console.log(`Score is ${score === n ? 'perfect' : 'zero'} — engine is at least ${score === n ? 'above' : 'below'} the opponent; rerun with a ${score === n ? 'stronger' : 'weaker'} opponent or more pairs.`);
   }
 
   if (PGN_FILE) {

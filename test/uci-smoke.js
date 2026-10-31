@@ -17,6 +17,7 @@ const proc = spawn(process.execPath, [path.join(__dirname, '..', 'uci.js')], {
 let buf = '';
 const lines = [];
 const waiters = [];
+let consumed = 0;   // index of the first line no waiter has claimed yet
 
 proc.stdout.setEncoding('utf8');
 proc.stdout.on('data', chunk => {
@@ -30,6 +31,7 @@ proc.stdout.on('data', chunk => {
     for (const w of waiters.slice()) {
       if (w.match(line)) {
         waiters.splice(waiters.indexOf(w), 1);
+        consumed = lines.length;
         w.resolve(line);
       }
     }
@@ -42,6 +44,14 @@ function send(cmd) {
 
 function waitFor(match, timeoutMs = 15000, label = '') {
   return new Promise((resolve, reject) => {
+    // Replies that already arrived (a book move answers in ~1 ms, faster than
+    // this promise can be armed) must be found in the backlog, not missed.
+    for (let i = consumed; i < lines.length; i++) {
+      if (match(lines[i])) {
+        consumed = i + 1;
+        return resolve(lines[i]);
+      }
+    }
     const timer = setTimeout(() => reject(new Error('timeout waiting for ' + (label || match))), timeoutMs);
     waiters.push({ match, resolve: line => { clearTimeout(timer); resolve(line); } });
   });
@@ -59,8 +69,9 @@ function assert(cond, msg) {
 (async () => {
   send('uci');
   await waitFor(l => l === 'uciok', 15000, 'uciok');
-  assert(lines.some(l => l.startsWith('id name KiwaChess 2.2.0')), 'engine identifies itself');
-  for (const opt of ['Threads', 'Hash', 'OwnBook', 'Book Depth', 'Book Variety', 'Move Overhead', 'Clear Hash']) {
+  assert(lines.some(l => l.startsWith('id name KiwaChess 2.3.0')), 'engine identifies itself');
+  for (const opt of ['Threads', 'Hash', 'OwnBook', 'Book Depth', 'Book Variety', 'Book Style',
+                     'Opening Diversity', 'Random Seed', 'Clear Book Memory', 'Move Overhead', 'Clear Hash']) {
     assert(lines.some(l => l.startsWith(`option name ${opt} `)), `advertises ${opt}`);
   }
 
@@ -97,6 +108,65 @@ function assert(cond, msg) {
     starts.add(line.split(' ')[1]);
   }
   assert(starts.size >= 2, `book variety produced ${starts.size} distinct first moves: ${[...starts].join(',')}`);
+
+  // Diagnostics must report the engine that is actually playing. Before 2.3.0
+  // the front-end answered `bookmemory`/`eval` from its own JavaScript state
+  // even when the native core owned the book, which printed all-zero memory.
+  send('setoption name Book Style value Surprise');
+  send('setoption name Random Seed value 7');
+  // Both spellings of a button have to work: the UCI spec form, and the
+  // trailing bare `value` some GUIs send. The second one used to swallow the
+  // word "value" into the option name, so nothing was cleared.
+  for (const form of ['setoption name Clear Book Memory value', 'setoption name Clear Book Memory']) {
+    send(form);
+    send('ucinewgame');
+    send('position startpos');
+    send('go wtime 60000 btime 60000');
+    await waitFor(l => l.startsWith('bestmove '));
+    send('position startpos');
+    send('bookmemory');
+    const after = await waitFor(l => l.includes('book memory'), 10000, 'bookmemory after clear');
+    const counts = {};
+    for (const m of after.matchAll(/([a-z_]+)=(\d+)/g)) counts[m[1]] = +m[2];
+    assert(counts.white_moves === 1, `${form} clears the memory then records one move: ${after}`);
+  }
+  send('setoption name Clear Book Memory');
+  send('position startpos');
+  send('bookmemory');
+  const mem = await waitFor(l => l.includes('book memory'), 10000, 'bookmemory');
+  const nums = {};
+  for (const m of mem.matchAll(/([a-z_]+)=(\d+)/g)) nums[m[1]] = +m[2];
+  assert(nums.white_moves === 0, `bookmemory reports zero after an explicit clear: ${mem}`);
+  send('setoption name Book Style value Surprise');
+  send('setoption name Random Seed value 7');
+  send('ucinewgame');
+  send('position startpos');
+  send('go wtime 60000 btime 60000');
+  await waitFor(l => l.startsWith('bestmove '));
+  send('position startpos');
+  send('bookmemory');
+  const played = await waitFor(l => l.includes('book memory'), 10000, 'bookmemory');
+  const playedNums = {};
+  for (const m of played.matchAll(/([a-z_]+)=(\d+)/g)) playedNums[m[1]] = +m[2];
+  assert(playedNums.white_moves > 0, `bookmemory reports the played book move: ${played}`);
+  send('eval');
+  const ev = await waitFor(l => l.startsWith('info string eval '), 10000, 'eval');
+  assert(/info string eval -?\d+ cp/.test(ev), `eval prints a centipawn score: ${ev}`);
+  send('setoption name Book Style value Balanced');
+
+  // The requested repertoire must be reachable through setoption, including the
+  // personalities that have no data of their own in a given position.
+  for (const style of ['Mainline', 'Aggressive', 'Positional', 'Solid', 'Gambit', 'Surprise']) {
+    send(`setoption name Book Style value ${style}`);
+    send('ucinewgame');
+    send('position startpos');
+    const t = Date.now();
+    send('go wtime 60000 btime 60000');
+    const line = await waitFor(l => l.startsWith('bestmove '));
+    const mv = line.split(' ')[1];
+    assert(/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(mv), `${style}: legal opening move ${mv}`);
+    assert(Date.now() - t < 4000, `${style}: answered from the book (${Date.now() - t} ms)`);
+  }
 
   // A middlegame position must be searched, not booked.
   send('position fen r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 4 6');

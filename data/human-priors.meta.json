@@ -1,0 +1,68 @@
+{
+  "dataset": "human-priors",
+  "derivedFrom": "test/data/human-games.json (TRAIN split only)",
+  "sourceLicense": "CC0 1.0 Universal (public domain dedication)",
+  "license": "CC0 1.0 Universal (public domain dedication) - derived from CC0 Lichess exports",
+  "generatedWith": "test/train-priors.js",
+  "generatedAt": "2026-10-31T14:39:55.808Z",
+  "keyScheme": "first three FEN fields (board, side to move, castling); en passant excluded like book.js; every stored move re-verified legal with ep cleared",
+  "rowFormat": "[uci, count, featureCounts in `features` order, bookBalancedWeight]",
+  "features": [
+    "capture",
+    "castling",
+    "check",
+    "queenTrade",
+    "centralPawn",
+    "develop",
+    "recapture",
+    "kingZone",
+    "hanging",
+    "inBook",
+    "quiet",
+    "queenMove"
+  ],
+  "featureDefinitions": {
+    "capture": "move takes something (including en passant)",
+    "castling": "O-O or O-O-O",
+    "check": "opponent king is attacked after the move",
+    "queenTrade": "a queen is captured, or the queen moves to a square where it can be taken at once",
+    "centralPawn": "pawn moves to d4/e4/d5/e5, or a two-square push onto ranks 4/5 of files c-f",
+    "develop": "knight or bishop leaves the back rank",
+    "recapture": "captures on the square the opponent just landed on (needs the previous ply, so it is counted, not inferred)",
+    "kingZone": "destination inside the 5x5 box around the enemy king",
+    "hanging": "the moved piece can be captured immediately by a piece worth at most as much (and the move gives no check)",
+    "inBook": "the human move is present in Kiwa's opening book entry for this key",
+    "quiet": "not a capture, not castling, not a promotion",
+    "queenMove": "the moved piece is a queen"
+  },
+  "totals": {
+    "trainGames": 645,
+    "evalGames": 231,
+    "trainPliesWalked": 40158,
+    "trainPliesStored": 23734,
+    "evalPliesWalked": 15666,
+    "evalPliesWithinPlyCap": 8708,
+    "distinctPositions": 19977,
+    "storedMoveRows": 20737,
+    "avgMovesPerPosition": 1.04,
+    "avgLegalMovesPerStoredPosition": 32.7,
+    "legalMoveFeatureObservations": 776095
+  },
+  "evalCoverage": {
+    "note": "measured on the EVAL split only; this table was fit on TRAIN only",
+    "positionsPresent": 1515,
+    "positionCoveragePct": 17.4,
+    "movesPresent": 1229,
+    "moveCoveragePct": 14.11,
+    "naiveTop1MostFrequentStoredMove": {
+      "hits": 746,
+      "n": 1515,
+      "pct": 49.24
+    }
+  },
+  "caveats": [
+    "Counts come from Lichess blitz/bullet games of mostly amateur players.",
+    "A position seen once has count 1: the table is noisy at the tail, which is what the smoothing/backoff in the harness is for.",
+    "Feature marginals over all legal moves are computed on the same train positions (denominator = sum of legal move counts)."
+  ]
+}

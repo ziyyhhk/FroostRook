@@ -19,6 +19,7 @@ class NativeEngine {
     this.info = null;
     this.onInfo = null;
     this.waiters = [];
+    this.queries = [];
     this.broken = false;
   }
 
@@ -47,11 +48,37 @@ class NativeEngine {
   _flush(value) {
     const ws = this.waiters.splice(0);
     for (const w of ws) w(value);
+    const qs = this.queries.splice(0);
+    for (const q of qs) { clearTimeout(q.timer); q.resolve(null); }
   }
 
   send(cmd) {
     if (!this.proc) this.start();
     this.proc.stdin.write(cmd + '\n');
+  }
+
+  // Send a command that is answered by a line rather than by a search, and
+  // resolve with the first line that starts with `prefix`. Used for the
+  // diagnostic commands so the front-end reports the engine that is actually
+  // playing. Resolves null if the engine is unavailable or does not answer.
+  query(cmd, prefix, timeoutMs = 5000) {
+    return new Promise(resolve => {
+      try {
+        if (!this.proc) this.start();
+      } catch {
+        resolve(null);
+        return;
+      }
+      if (!this.proc) { resolve(null); return; }
+      const entry = { prefix, resolve };
+      entry.timer = setTimeout(() => {
+        const i = this.queries.indexOf(entry);
+        if (i >= 0) this.queries.splice(i, 1);
+        resolve(null);
+      }, timeoutMs);
+      this.queries.push(entry);
+      this.send(cmd);
+    });
   }
 
   _onData(chunk) {
@@ -65,6 +92,15 @@ class NativeEngine {
   }
 
   _onLine(line) {
+    for (let i = 0; i < this.queries.length; i++) {
+      const q = this.queries[i];
+      if (line.startsWith(q.prefix)) {
+        this.queries.splice(i, 1);
+        clearTimeout(q.timer);
+        q.resolve(line);
+        return;
+      }
+    }
     if (line.startsWith('info ')) {
       const m = line.match(/^info depth (\d+) score (cp|mate) (-?\d+) nodes (\d+) nps (\d+) time (\d+)(?: pv (.*))?$/);
       if (m) {

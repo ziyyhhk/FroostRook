@@ -9,3 +9,7 @@ C40	Latvian Gambit	1. e4 e5 2. Nf3 f5
 C40	Elephant Gambit	1. e4 e5 2. Nf3 d5
 B01	Scandinavian Gambit	1. e4 d5 2. exd5 Nf6 3. c4 e6
 C44	King's Gambit: Rosentreter	1. e4 e5 2. f4 exf4 3. Nf3 g5 4. d4
+C57	Two Knights Defense: Wilkes-Barre Variation	1. e4 e5 2. Nf3 Nc6 3. Bc4 Nf6 4. Ng5 Bc5 5. Nxf7 Bxf2+ 6. Kxf2 Qe7
+B30	Sicilian Defense: Snyder Variation	1. e4 c5 2. Nf3 d6 3. b4
+B28	Sicilian Defense: O'Kelly Variation	1. e4 c5 2. Nf3 a6
+A45	Pseudo-Trompowsky Attack	1. d4 Nf6 2. Bg5 e6 3. e4

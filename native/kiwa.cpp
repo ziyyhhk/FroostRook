@@ -23,6 +23,7 @@
 #include <chrono>
 #include <algorithm>
 #include <random>
+#include <unordered_map>
 #include "book_data.h"
 
 using namespace std;
@@ -50,6 +51,9 @@ static inline int colorOf(int p) { return p >> 3; }
 static inline bool validSq(int s) { return (s & 0x88) == 0; }
 // Index into pieceSq/pieceCount; distinct from the packed board code `pc()`.
 static inline int pieceIndex(int c, int t) { return c * 6 + t - 1; }
+
+static inline bool attacked(int sq, int by);
+static bool epCapturePossible(int by);
 
 static const int KNIGHT_D[8] = { 33, 31, 18, 14, -33, -31, -18, -14 };
 static const int KING_D[8] = { 17, 16, 15, 1, -1, -15, -16, -17 };
@@ -339,7 +343,9 @@ static void setFen(const string& fen) {
   if (fullmove < 1) fullmove = 1;
 
   key ^= ZC[castling];
-  if (epSq >= 0) key ^= ZE[epSq & 7];
+  // An ep square only distinguishes positions when the capture is legal
+  // (FIDE 9.2.2). FENs often carry an ep square after every double push.
+  if (epSq >= 0 && epCapturePossible(side)) key ^= ZE[epSq & 7];
   if (side == BLACK) key ^= ZS;
 
   posKeys[0] = key;
@@ -402,6 +408,139 @@ static inline bool attacked(int sq, int by) {
     }
   }
   return false;
+}
+
+// A legal en-passant capture changes the position's possible moves, so only
+// then is the ep square part of the Zobrist key and repetition identity.
+// Merely having a pawn beside the square is not enough: the capture may
+// expose the king.
+static bool epCapturePossible(int by) {
+  if (epSq < 0 || board[epSq] != 0) return false;
+  // The capturing pawn stands one rank on the capturer's side of the ep
+  // target; the captured pawn stands on the target's far side.
+  const int pawnRank = epSq + (by == WHITE ? -16 : 16);
+  const int capSq = pawnRank;
+  if (!validSq(capSq) || board[capSq] != pc(by ^ 1, PAWN)) return false;
+  for (int df = -1; df <= 1; df += 2) {
+    const int from = pawnRank + df;
+    if (!validSq(from) || board[from] != pc(by, PAWN)) continue;
+    const int8_t savedFrom = board[from];
+    const int8_t savedTo = board[epSq];
+    const int8_t savedCap = board[capSq];
+    board[from] = 0;
+    board[capSq] = 0;
+    board[epSq] = (int8_t)pc(by, PAWN);
+    const bool legal = !attacked(kingSq[by], by ^ 1);
+    board[from] = savedFrom;
+    board[capSq] = savedCap;
+    board[epSq] = savedTo;
+    if (legal) return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Static exchange evaluation
+// ---------------------------------------------------------------------------
+
+static const int SEE_VAL[7] = { 0, 100, 320, 330, 500, 900, 10000 };
+
+// Least valuable piece of colour `by` attacking `to` on a local board copy.
+// Called repeatedly it also exposes x-ray attackers, because the previous
+// attacker has already been removed from the copy.
+static int leastAttacker(const int8_t* b, int to, int by, int& outType) {
+  int bestSq = 0, bestVal = 1 << 20, bestType = 0;
+  auto consider = [&](int sq, int t) {
+    if (!validSq(sq)) return;
+    if (b[sq] != (int8_t)pc(by, t)) return;
+    const int v = SEE_VAL[t];
+    if (v < bestVal) { bestVal = v; bestSq = sq; bestType = t; }
+  };
+
+  if (by == WHITE) {
+    consider(to - 15, PAWN);
+    consider(to - 17, PAWN);
+  } else {
+    consider(to + 15, PAWN);
+    consider(to + 17, PAWN);
+  }
+  for (int i = 0; i < 8; i++) consider(to + KNIGHT_D[i], KNIGHT);
+  for (int i = 0; i < 8; i++) consider(to + KING_D[i], KING);
+  for (int i = 0; i < 4; i++) {
+    const int d = BISHOP_D[i];
+    int s = to + d;
+    while (validSq(s)) {
+      if (b[s]) {
+        consider(s, BISHOP);
+        consider(s, QUEEN);
+        break;
+      }
+      s += d;
+    }
+  }
+  for (int i = 0; i < 4; i++) {
+    const int d = ROOK_D[i];
+    int s = to + d;
+    while (validSq(s)) {
+      if (b[s]) {
+        consider(s, ROOK);
+        consider(s, QUEEN);
+        break;
+      }
+      s += d;
+    }
+  }
+  outType = bestType;
+  return bestSq;
+}
+
+// Full swap-list SEE. Positive means the capture wins material with best play
+// on both sides, negative means it loses material. Pins are ignored, which is
+// the usual approximation for ordering and pruning.
+static int see(uint32_t mv) {
+  const int from = mv & 127;
+  const int to = (mv >> 7) & 127;
+  const int promo = (mv >> 14) & 7;
+  const int flags = mv & (F_CAP | F_EP);
+  if (!(flags & F_CAP)) return 0;
+
+  int8_t b[128];
+  memcpy(b, board, sizeof(b));
+
+  int gain[32];
+  int d = 0;
+  const int us = side;
+  const int victim = (flags & F_EP) ? PAWN : typeOf(board[to]);
+  gain[0] = SEE_VAL[victim];
+  int onTo = promo ? promo : typeOf(board[from]);
+  if (promo) gain[0] += SEE_VAL[promo] - SEE_VAL[PAWN];
+
+  b[from] = 0;
+  if (flags & F_EP) b[to + (us == WHITE ? -16 : 16)] = 0;
+  b[to] = (int8_t)pc(us, onTo);
+
+  int stm = us ^ 1;
+  while (d < 30) {
+    int atkType = 0;
+    const int atkSq = leastAttacker(b, to, stm, atkType);
+    if (!atkSq) break;
+    d++;
+    gain[d] = SEE_VAL[onTo] - gain[d - 1];
+    b[atkSq] = 0;
+    int newType = atkType;
+    if (atkType == PAWN &&
+        ((stm == WHITE && (to >> 4) == 7) || (stm == BLACK && (to >> 4) == 0))) {
+      newType = QUEEN;
+    }
+    b[to] = (int8_t)pc(stm, newType);
+    onTo = newType;
+    stm ^= 1;
+  }
+  while (d > 0) {
+    d--;
+    gain[d] = -max(-gain[d], gain[d + 1]);
+  }
+  return gain[0];
 }
 
 // ---------------------------------------------------------------------------
@@ -594,7 +733,7 @@ static inline void makeMove(uint32_t mv) {
   stCap[st] = 0;
 
   key ^= ZC[castling];
-  if (epSq >= 0) key ^= ZE[epSq & 7];
+  if (epSq >= 0 && epCapturePossible(side)) key ^= ZE[epSq & 7];
 
   const int us = side, them = us ^ 1;
   const int moving = board[from];
@@ -645,7 +784,7 @@ static inline void makeMove(uint32_t mv) {
   epSq = (flags & F_DOUBLE) ? (from + (us == WHITE ? 16 : -16)) : -1;
 
   key ^= ZC[castling];
-  if (epSq >= 0) key ^= ZE[epSq & 7];
+  if (epSq >= 0 && epCapturePossible(them)) key ^= ZE[epSq & 7];
   key ^= ZS;
 
   if (us == BLACK) fullmove++;
@@ -701,7 +840,7 @@ static inline void makeNull() {
   stKey[st] = key;
   stCap[st] = 0;
 
-  if (epSq >= 0) key ^= ZE[epSq & 7];
+  if (epSq >= 0 && epCapturePossible(side)) key ^= ZE[epSq & 7];
   epSq = -1;
   halfmove++;
   key ^= ZS;
@@ -723,13 +862,32 @@ static inline void unmakeNull() {
 
 static thread_local int wpFiles[8];
 static thread_local int bpFiles[8];
-static const int PASSED[8] = { 0, 8, 12, 20, 35, 60, 100, 0 };
+static const int PASSED_MG[8] = { 0, 8, 12, 20, 35, 60, 100, 0 };
+static const int PASSED_EG[8] = { 0, 8, 12, 20, 35, 60, 100, 0 };
+
+// Mobility per safe destination square, indexed by piece type. A destination
+// occupied by the enemy counts, but squares covered by an enemy pawn do not.
+// Ray-scan mobility is the most expensive term in the evaluation, so which
+// piece types get it is a build-time switch measured by test/eval-ab.js and the duel mode of test/elo.js:
+//   0 = off, 1 = knights and bishops only, 2 = also rooks and queens.
+#ifndef KIWA_MOB
+#define KIWA_MOB 2
+#endif
+static const int MOB_MG[7] = { 0, 0, 3, 2, 2, 1, 0 };
+static const int MOB_EG[7] = { 0, 0, 3, 2, 3, 1, 0 };
+static const int OUTPOST_N_MG = 25, OUTPOST_N_EG = 15;
+static const int OUTPOST_B_MG = 15, OUTPOST_B_EG = 10;
+
+// Pawn attack maps, rebuilt on every full-extras miss.
+static thread_local int8_t wPawnAtk[128];
+static thread_local int8_t bPawnAtk[128];
 
 // Pawn-structure cache keyed by the pawn-only Zobrist key.
 static const int PH_SIZE = 1 << 13;
 static const int PH_MASK = PH_SIZE - 1;
 static thread_local u64 phKey[PH_SIZE];
-static thread_local int phScore[PH_SIZE];
+static thread_local int phScoreMg[PH_SIZE];
+static thread_local int phScoreEg[PH_SIZE];
 static thread_local int phWB[PH_SIZE];
 static thread_local int phBB[PH_SIZE];
 
@@ -737,19 +895,88 @@ static thread_local int phBB[PH_SIZE];
 static const int EX_SIZE = 1 << 15;
 static const int EX_MASK = EX_SIZE - 1;
 static thread_local u64 exKey[EX_SIZE];
-static thread_local int exScore[EX_SIZE];
+static thread_local int exScoreMg[EX_SIZE];
+static thread_local int exScoreEg[EX_SIZE];
+static thread_local int extraMg, extraEg;
 
-static int extrasRaw() {
+static inline int chebDist(int a, int b) {
+  const int dr = abs((a >> 4) - (b >> 4));
+  const int df = abs((a & 7) - (b & 7));
+  return dr > df ? dr : df;
+}
+
+static inline void fillPawnAttacks() {
+  for (int i = 0; i < 128; i++) { wPawnAtk[i] = 0; bPawnAtk[i] = 0; }
+  const int wn = pieceCount[0 * 6 + PAWN - 1];
+  for (int i = 0; i < wn; i++) {
+    const int sq = pieceSq[(0 * 6 + PAWN - 1) * 16 + i];
+    int a = sq + 15; if (validSq(a)) wPawnAtk[a] = 1;
+    a = sq + 17; if (validSq(a)) wPawnAtk[a] = 1;
+  }
+  const int bn = pieceCount[1 * 6 + PAWN - 1];
+  for (int i = 0; i < bn; i++) {
+    const int sq = pieceSq[(1 * 6 + PAWN - 1) * 16 + i];
+    int a = sq - 15; if (validSq(a)) bPawnAtk[a] = 1;
+    a = sq - 17; if (validSq(a)) bPawnAtk[a] = 1;
+  }
+}
+
+// Enemy pawns that could ever attack `sq` (one rank behind it, adjacent file).
+static inline bool enemyPawnCanReach(int sq, int c) {
+  const int a = sq + (c == WHITE ? 15 : -15);
+  const int b = sq + (c == WHITE ? 17 : -17);
+  return (validSq(a) && board[a] == pc(c ^ 1, PAWN)) ||
+         (validSq(b) && board[b] == pc(c ^ 1, PAWN));
+}
+
+static const int QUEEN_D[8] = { 17, 15, -15, -17, 16, -16, 1, -1 };
+
+// Pseudo-legal destination count, excluding own pieces and enemy-pawn cover.
+static inline int pieceMobility(int c, int t, int sq, const int8_t* enemyPawnAtk) {
+  int m = 0;
+  if (t == KNIGHT) {
+    for (int i = 0; i < 8; i++) {
+      const int ns = sq + KNIGHT_D[i];
+      if (!validSq(ns)) continue;
+      const int b = board[ns];
+      if (b && (b >> 3) == c) continue;
+      if (enemyPawnAtk[ns]) continue;
+      m++;
+    }
+    return m;
+  }
+  const int* dirs;
+  int n;
+  if (t == BISHOP) { dirs = BISHOP_D; n = 4; }
+  else if (t == ROOK) { dirs = ROOK_D; n = 4; }
+  else { dirs = QUEEN_D; n = 8; }
+  for (int i = 0; i < n; i++) {
+    int ns = sq;
+    while (true) {
+      ns += dirs[i];
+      if (!validSq(ns)) break;
+      const int b = board[ns];
+      if (b && (b >> 3) == c) break;
+      if (!enemyPawnAtk[ns]) m++;
+      if (b) break;
+    }
+  }
+  return m;
+}
+
+static void extrasRaw() {
   const int wpIdx = 0 * 6 + PAWN - 1, bpIdx = 1 * 6 + PAWN - 1;
   const int wpc = pieceCount[wpIdx], bpc = pieceCount[bpIdx];
-  int s = 0;
+  int xmg = 0, xeg = 0;
+
+  fillPawnAttacks();
 
   if (wpc == 0 && bpc == 0) {
     for (int f = 0; f < 8; f++) { wpFiles[f] = 0; bpFiles[f] = 0; }
   } else {
     const int idx = (int)(pawnKey & PH_MASK);
     if (phKey[idx] == pawnKey) {
-      s = phScore[idx];
+      xmg = phScoreMg[idx]; xeg = phScoreEg[idx];
       int wb = phWB[idx], bb = phBB[idx];
       for (int f = 0; f < 8; f++) {
         wpFiles[f] = wb & 15; wb >>= 4;
@@ -763,23 +990,65 @@ static int extrasRaw() {
 
       // Doubled / isolated
       for (int f = 0; f < 8; f++) {
-        if (wpFiles[f] > 1) s -= 12 * (wpFiles[f] - 1);
-        if (bpFiles[f] > 1) s += 12 * (bpFiles[f] - 1);
+        if (wpFiles[f] > 1) { xmg -= 12 * (wpFiles[f] - 1); xeg -= 12 * (wpFiles[f] - 1); }
+        if (bpFiles[f] > 1) { xmg += 12 * (bpFiles[f] - 1); xeg += 12 * (bpFiles[f] - 1); }
       }
       for (int i = 0; i < wpc; i++) {
         const int f = pieceSq[wpBase + i] & 7;
         const int left = f > 0 ? wpFiles[f - 1] : 0;
         const int right = f < 7 ? wpFiles[f + 1] : 0;
-        if (!left && !right) s -= 14;
+        if (!left && !right) { xmg -= 14; xeg -= 14; }
       }
       for (int i = 0; i < bpc; i++) {
         const int f = pieceSq[bpBase + i] & 7;
         const int left = f > 0 ? bpFiles[f - 1] : 0;
         const int right = f < 7 ? bpFiles[f + 1] : 0;
-        if (!left && !right) s += 14;
+        if (!left && !right) { xmg += 14; xeg += 14; }
       }
 
-      // Passed pawns
+      // Connected pawns (defended or phalanx), never on an isolated pawn.
+      for (int c = 0; c < 2; c++) {
+        const int sign = c == WHITE ? 1 : -1;
+        const int pi = c * 6 + PAWN - 1;
+        const int own = pc(c, PAWN);
+        const int back = c == WHITE ? -16 : 16;
+        const int* fileCnt = c == WHITE ? wpFiles : bpFiles;
+        const int8_t* enemyAtk = c == WHITE ? bPawnAtk : wPawnAtk;
+        for (int i = 0; i < pieceCount[pi]; i++) {
+          const int sq = pieceSq[pi * 16 + i];
+          const int f = sq & 7;
+          bool connected = false;
+          for (int df = -1; df <= 1 && !connected; df += 2) {
+            if (f + df < 0 || f + df > 7) continue;
+            const int support = sq + back + df;
+            if (validSq(support) && board[support] == own) connected = true;
+            const int side = sq + df;
+            if (validSq(side) && board[side] == own) connected = true;
+          }
+          if (connected) { xmg += sign * 4; xeg += sign * 2; }
+
+          // Backward: no pawn able to defend it, yet an adjacent-file pawn
+          // exists (so isolated pawns are not counted twice), and its stop
+          // square is covered by an enemy pawn.
+          const int r = sq >> 4;
+          const int rr = c == WHITE ? r : 7 - r;
+          if (rr >= 1 && rr <= 5) {
+            bool defended = false, anyAdj = false;
+            for (int df = -1; df <= 1; df += 2) {
+              if (f + df < 0 || f + df > 7) continue;
+              if (fileCnt[f + df]) anyAdj = true;
+              const int support = sq + back + df;
+              if (validSq(support) && board[support] == own) defended = true;
+            }
+            if (!defended && anyAdj) {
+              const int stop = sq + (c == WHITE ? 16 : -16);
+              if (validSq(stop) && enemyAtk[stop]) { xmg -= sign * 6; xeg -= sign * 8; }
+            }
+          }
+        }
+      }
+
+      // Passed pawns (rank bonus here; king distance is added below).
       for (int i = 0; i < wpc; i++) {
         const int sq = pieceSq[wpBase + i];
         const int f = sq & 7, r = sq >> 4;
@@ -788,7 +1057,7 @@ static int extrasRaw() {
           const int bs = pieceSq[bpBase + j];
           if ((bs >> 4) > r && abs((bs & 7) - f) <= 1) { blocked = true; break; }
         }
-        if (!blocked) s += PASSED[r];
+        if (!blocked) { xmg += PASSED_MG[r]; xeg += PASSED_EG[r]; }
       }
       for (int i = 0; i < bpc; i++) {
         const int sq = pieceSq[bpBase + i];
@@ -798,21 +1067,100 @@ static int extrasRaw() {
           const int ws = pieceSq[wpBase + j];
           if ((ws >> 4) < r && abs((ws & 7) - f) <= 1) { blocked = true; break; }
         }
-        if (!blocked) s -= PASSED[7 - r];
+        if (!blocked) { xmg -= PASSED_MG[7 - r]; xeg -= PASSED_EG[7 - r]; }
       }
 
       int wb = 0, bb = 0;
       for (int f = 7; f >= 0; f--) { wb = (wb << 4) | wpFiles[f]; bb = (bb << 4) | bpFiles[f]; }
       phKey[idx] = pawnKey;
-      phScore[idx] = s; phWB[idx] = wb; phBB[idx] = bb;
+      phScoreMg[idx] = xmg; phScoreEg[idx] = xeg; phWB[idx] = wb; phBB[idx] = bb;
+    }
+  }
+
+  // Passed-pawn king distance: an enemy king far from the promotion square is
+  // worth more in the endgame. Recomputed only on whole-extras cache misses.
+  for (int c = 0; c < 2; c++) {
+    const int sign = c == WHITE ? 1 : -1;
+    const int pi = c * 6 + PAWN - 1;
+    const int epi = (c ^ 1) * 6 + PAWN - 1;
+    for (int i = 0; i < pieceCount[pi]; i++) {
+      const int sq = pieceSq[pi * 16 + i];
+      const int f = sq & 7, r = sq >> 4;
+      bool passed = true;
+      for (int j = 0; j < pieceCount[epi]; j++) {
+        const int es = pieceSq[epi * 16 + j];
+        const int er = es >> 4;
+        if (c == WHITE ? (er > r && abs((es & 7) - f) <= 1)
+                       : (er < r && abs((es & 7) - f) <= 1)) { passed = false; break; }
+      }
+      if (!passed) continue;
+      const int promo = c == WHITE ? ((sq & 7) | 0x70) : (sq & 7);
+      const int d = chebDist(kingSq[c ^ 1], promo);
+      xeg += sign * (7 - d) * 2;
+    }
+  }
+
+  // Mobility, excluding squares covered by an enemy pawn. Ray scans are the
+  // most expensive term in the evaluation, so the piece set is a build-time
+  // switch used by the A/B measurements: KIWA_MOB=0 off, 1 knights+bishops,
+  // 2 also rooks+queens. The shipped value is chosen by measurement.
+  {
+    const int mobMax = KIWA_MOB == 0 ? KNIGHT - 1 : (KIWA_MOB == 1 ? BISHOP : QUEEN);
+    for (int c = 0; c < 2; c++) {
+      const int sign = c == WHITE ? 1 : -1;
+      const int8_t* enemyAtk = c == WHITE ? bPawnAtk : wPawnAtk;
+      for (int t = KNIGHT; t <= mobMax; t++) {
+        const int pi = c * 6 + t - 1;
+        for (int i = 0; i < pieceCount[pi]; i++) {
+          const int m = pieceMobility(c, t, pieceSq[pi * 16 + i], enemyAtk);
+          if (m) { xmg += sign * m * MOB_MG[t]; xeg += sign * m * MOB_EG[t]; }
+        }
+      }
+    }
+  }
+
+  // Outposts: knight/bishop on the 4th-6th rank, defended by an own pawn and
+  // not attackable by an enemy pawn (now or after a push).
+  for (int c = 0; c < 2; c++) {
+    const int sign = c == WHITE ? 1 : -1;
+    const int8_t* ownAtk = c == WHITE ? wPawnAtk : bPawnAtk;
+    const int8_t* enemyAtk = c == WHITE ? bPawnAtk : wPawnAtk;
+    for (int t = KNIGHT; t <= BISHOP; t++) {
+      const int pi = c * 6 + t - 1;
+      for (int i = 0; i < pieceCount[pi]; i++) {
+        const int sq = pieceSq[pi * 16 + i];
+        const int r = sq >> 4;
+        const bool rankOk = c == WHITE ? (r >= 3 && r <= 5) : (r >= 2 && r <= 4);
+        if (!rankOk || !ownAtk[sq] || enemyAtk[sq]) continue;
+        if (enemyPawnCanReach(sq, c)) continue;
+        if (t == KNIGHT) { xmg += sign * OUTPOST_N_MG; xeg += sign * OUTPOST_N_EG; }
+        else { xmg += sign * OUTPOST_B_MG; xeg += sign * OUTPOST_B_EG; }
+      }
     }
   }
 
   // Bishop pair
-  if (pieceCount[0 * 6 + BISHOP - 1] >= 2) s += 30;
-  if (pieceCount[1 * 6 + BISHOP - 1] >= 2) s -= 30;
+  if (pieceCount[0 * 6 + BISHOP - 1] >= 2) { xmg += 30; xeg += 30; }
+  if (pieceCount[1 * 6 + BISHOP - 1] >= 2) { xmg -= 30; xeg -= 30; }
 
-  // Rooks on open / semi-open files, and on the seventh rank
+  // Bad bishop: own pawns on the bishop's colour restrict it.
+  for (int c = 0; c < 2; c++) {
+    const int sign = c == WHITE ? 1 : -1;
+    const int bi = c * 6 + BISHOP - 1, pi = c * 6 + PAWN - 1;
+    for (int i = 0; i < pieceCount[bi]; i++) {
+      const int sq = pieceSq[bi * 16 + i];
+      const int bc = ((sq >> 4) + (sq & 7)) & 1;
+      int bad = 0;
+      for (int j = 0; j < pieceCount[pi]; j++) {
+        const int ps = pieceSq[pi * 16 + j];
+        if ((((ps >> 4) + (ps & 7)) & 1) == bc) bad++;
+      }
+      if (bad > 6) bad = 6;
+      xmg -= sign * 3 * bad; xeg -= sign * 2 * bad;
+    }
+  }
+
+  // Rooks on open / semi-open files, on the seventh rank, and connected.
   for (int c = 0; c < 2; c++) {
     const int sign = c == WHITE ? 1 : -1;
     const int ri = c * 6 + ROOK - 1;
@@ -822,10 +1170,22 @@ static int extrasRaw() {
       const int f = rsq & 7;
       const int own = c == WHITE ? wpFiles[f] : bpFiles[f];
       const int opp = c == WHITE ? bpFiles[f] : wpFiles[f];
-      if (!own && !opp) s += sign * 18;
-      else if (!own) s += sign * 8;
+      if (!own && !opp) { xmg += sign * 18; xeg += sign * 18; }
+      else if (!own) { xmg += sign * 8; xeg += sign * 8; }
       const int r = rsq >> 4;
-      if ((c == WHITE && r == 6) || (c == BLACK && r == 1)) s += sign * 14;
+      if ((c == WHITE && r == 6) || (c == BLACK && r == 1)) { xmg += sign * 14; xeg += sign * 14; }
+    }
+    for (int i = 0; i < cnt; i++) {
+      for (int j = i + 1; j < cnt; j++) {
+        const int a = pieceSq[ri * 16 + i], b = pieceSq[ri * 16 + j];
+        if ((a >> 4) != (b >> 4)) continue;
+        const int step = a < b ? 1 : -1;
+        bool clear = true;
+        for (int sq = a + step; sq != b; sq += step) {
+          if (board[sq]) { clear = false; break; }
+        }
+        if (clear) { xmg += sign * 12; xeg += sign * 8; }
+      }
     }
   }
 
@@ -847,25 +1207,38 @@ static int extrasRaw() {
           else shield -= 10;
         }
       }
-      s += sign * shield;
+      xmg += sign * shield; xeg += sign * shield;
     }
   }
 
-  return s;
+  extraMg = xmg; extraEg = xeg;
 }
 
-static int extras() {
+static void extras() {
   const int idx = (int)(key & EX_MASK);
-  if (exKey[idx] == key) return exScore[idx];
-  const int s = extrasRaw();
-  exKey[idx] = key; exScore[idx] = s;
-  return s;
+  if (exKey[idx] == key) {
+    extraMg = exScoreMg[idx]; extraEg = exScoreEg[idx];
+    return;
+  }
+  extrasRaw();
+  exKey[idx] = key; exScoreMg[idx] = extraMg; exScoreEg[idx] = extraEg;
 }
+
+// Positional terms (pawn structure, outposts, bishop quality, rook activity,
+// king shield, passed-pawn king distance, mobility). Measured by
+// test/eval-ab.js: they buy tactical accuracy at a fixed time control but cost
+// nodes per second, so the switch stays for reproduction of those runs.
+#ifndef KIWA_EXTRAS
+#define KIWA_EXTRAS 1
+#endif
 
 static int evaluate() {
   const int p = phase > 24 ? 24 : phase;
   int s = (mg * p + eg * (24 - p)) / 24;
-  s += extras();
+#if KIWA_EXTRAS
+  extras();
+  s += (extraMg * p + extraEg * (24 - p)) / 24;
+#endif
   return (side == WHITE ? s : -s) + 8;
 }
 
@@ -928,10 +1301,86 @@ static int moveOverhead = 30; // ms of the clock never spent, for GUI/IPC latenc
 static bool ownBook = true;
 static int bookDepthPlies = 24;
 static int bookVariety = 100;
+
+// Opening personalities. The generated book carries six weight columns per
+// move; a personality only changes which column is used, never the legality of
+// the move. The search validates questionable choices before they are played.
+enum BookStyle {
+  BOOK_BALANCED = 0,
+  BOOK_MAINLINE = 1,
+  BOOK_AGGRESSIVE = 2,
+  BOOK_GAMBIT = 3,
+  BOOK_SOLID = 4,
+  BOOK_SURPRISE = 5,
+  BOOK_POSITIONAL = 6
+};
+static const char* BOOK_STYLE_NAMES[7] = {
+  "Balanced", "Mainline", "Aggressive", "Gambit", "Solid", "Surprise", "Positional"
+};
+static int bookStyle = BOOK_BALANCED;
+static int bookDiversity = 50; // anti-repetition strength across games
+static i64 randomSeed = 0;     // 0 = derive from the clock
+
 static int threads = 1;
 static bool bookAllowed = false; // only for games that started from the initial position
-static mt19937_64 bookRng((u64)chrono::steady_clock::now().time_since_epoch().count() ^
-                          ((u64)random_device{}() << 32));
+
+static u64 makeBookSeed() {
+  if (randomSeed != 0) return (u64)randomSeed;
+  return (u64)chrono::steady_clock::now().time_since_epoch().count() ^
+         ((u64)random_device{}() << 32);
+}
+static mt19937_64 bookRng(makeBookSeed());
+
+// Session memory, kept across ucinewgame. White and Black have separate
+// repertoires, and the resulting-position set makes the memory transposition
+// aware: playing 1.d4 d5 2.Nf3 or 1.Nf3 d5 2.d4 is recognised as the same line.
+struct BookMemorySide {
+  unordered_map<uint64_t, uint8_t> moves;   // hash(position, move)
+  unordered_map<uint64_t, uint8_t> results; // hash(resulting position)
+};
+static BookMemorySide bookMem[2];
+
+static void bumpBookCount(unordered_map<uint64_t, uint8_t>& m, u64 k) {
+  auto it = m.find(k);
+  if (it == m.end()) m.emplace(k, 1);
+  else if (it->second < 12) it->second++;
+}
+
+// Age the counts once per game so recent games dominate without dropping
+// anything outright. Rounding up matters: a line played once keeps count 1,
+// so it is still remembered after ucinewgame; repeated lines fade toward 1.
+// Clearing is explicit via "Clear Book Memory".
+static void ageBookMemory() {
+  for (auto& sideMem : bookMem) {
+    for (auto* map : { &sideMem.moves, &sideMem.results }) {
+      for (auto it = map->begin(); it != map->end();) {
+        it->second = (uint8_t)((it->second + 1) / 2);
+        if (it->second == 0) it = map->erase(it);
+        else ++it;
+      }
+    }
+  }
+}
+
+static void clearBookMemory() {
+  for (auto& sideMem : bookMem) {
+    sideMem.moves.clear();
+    sideMem.results.clear();
+  }
+}
+
+static int parseBookStyle(const string& v) {
+  string s = v;
+  for (char& c : s) c = (char)tolower((unsigned char)c);
+  if (s == "mainline") return BOOK_MAINLINE;
+  if (s == "aggressive") return BOOK_AGGRESSIVE;
+  if (s == "gambit") return BOOK_GAMBIT;
+  if (s == "solid") return BOOK_SOLID;
+  if (s == "surprise") return BOOK_SURPRISE;
+  if (s == "positional") return BOOK_POSITIONAL;
+  return BOOK_BALANCED;
+}
+
 static thread_local u64 nodeLimit = 0;
 static thread_local i64 hardStop = INT64_MAX;
 static thread_local i64 softStop = INT64_MAX;
@@ -960,11 +1409,25 @@ static bool hasNonPawn(int c) {
          pieceCount[c * 6 + QUEEN - 1] > 0;
 }
 
+// Any earlier occurrence: used inside the search to cut cycles. A single
+// repetition is not a draw and must not be scored as one.
 static bool isRepetition() {
   int stop = histLen - 1 - halfmove;
   if (stop < 0) stop = 0;
   for (int i = histLen - 3; i >= stop; i -= 2) {
     if (posKeys[i] == key) return true;
+  }
+  return false;
+}
+
+// A real threefold claim: the current position plus two earlier identical
+// positions within the reversible window. This is the root adjudication rule.
+static bool isThreefold() {
+  int stop = histLen - 1 - halfmove;
+  if (stop < 0) stop = 0;
+  int seen = 0;
+  for (int i = histLen - 3; i >= stop; i -= 2) {
+    if (posKeys[i] == key && ++seen >= 2) return true;
   }
   return false;
 }
@@ -1007,7 +1470,11 @@ static int moveScore(uint32_t mv, uint32_t ttMove, int ply, uint32_t prevMv) {
   const int promo = (mv >> 14) & 7;
   const int flags = mv & (F_CAP | F_EP | F_CASTLE | F_DOUBLE);
 
-  if (promo) return (1 << 24) + promo * 1000;
+  if (promo) {
+    int sc = (1 << 24) + promo * 1000;
+    if (flags & F_CAP) sc += VAL_MG[board[to] ? typeOf(board[to]) : PAWN] * 8;
+    return sc;
+  }
 
   if (flags & F_CAP) {
     const int victim = board[to] ? typeOf(board[to]) : PAWN;
@@ -1057,6 +1524,7 @@ static int quiesce(int alpha, int beta, int ply, bool inCheck) {
   const int n = generateMoves(base, !inCheck);
   for (int i = 0; i < n; i++) scoreBuf[base + i] = moveScore(moveBuf[base + i], 0, ply, 0);
 
+  int legal = 0;
   for (int i = 0; i < n; i++) {
     const uint32_t mv = pickMove(base, n, i);
     const int flags = mv & (F_CAP | F_EP | F_CASTLE | F_DOUBLE);
@@ -1066,10 +1534,20 @@ static int quiesce(int alpha, int beta, int ply, bool inCheck) {
       const int promo = (mv >> 14) & 7;
       const int victim = (flags & F_CAP) ? (board[to] ? typeOf(board[to]) : PAWN) : 0;
       if (!promo && victim && best + VAL_MG[victim] + 200 < alpha) continue;
+      // A capture of a cheaper piece by a more valuable one is the only kind
+      // that can lose material by the exchange sequence; check those with SEE
+      // rather than every capture. Checks and promotions are never pruned.
+#ifndef NO_SEE_PRUNE
+      if (!promo && (flags & F_CAP) && victim &&
+          VAL_MG[victim] < VAL_MG[typeOf(board[mv & 127])] && see(mv) < 0) {
+        continue;
+      }
+#endif
     }
 
     makeMove(mv);
     if (attacked(kingSq[side ^ 1], side)) { unmakeMove(mv); continue; }
+    legal++;
 
     const bool givesCheck = attacked(kingSq[side], side ^ 1);
     const int sc = -quiesce(-beta, -alpha, ply + 1, givesCheck);
@@ -1084,6 +1562,8 @@ static int quiesce(int alpha, int beta, int ply, bool inCheck) {
       }
     }
   }
+  // In check with no legal evasion the position is mate, not a leaf eval.
+  if (inCheck && legal == 0) return -MATE + ply;
   return best;
 }
 
@@ -1153,16 +1633,23 @@ static int negamax(int depth, int alpha, int beta, int ply, bool canNull) {
   uint32_t bestMove = 0;
   int legal = 0;
   const int oldAlpha = alpha;
+  // Quiet moves already tried at this node, for history malus on a cutoff.
+  int quietHist[64];
+  int nQuiet = 0;
 
   for (int i = 0; i < n; i++) {
     const uint32_t mv = pickMove(base, n, i);
     const int flags = mv & (F_CAP | F_EP | F_CASTLE | F_DOUBLE);
     const int promo = (mv >> 14) & 7;
+    const int us = side;
 
     makeMove(mv);
     if (attacked(kingSq[side ^ 1], side)) { unmakeMove(mv); continue; }
     legal++;
     moveStack[ply] = mv;
+    if (!(flags & F_CAP) && !promo && nQuiet < 64) {
+      quietHist[nQuiet++] = us * 16384 + (mv & 127) * 128 + ((mv >> 7) & 127);
+    }
 
     const bool givesCheck = attacked(kingSq[side], side ^ 1);
     // Check extension: forced replies are cheap to resolve, so keep the depth.
@@ -1174,8 +1661,13 @@ static int negamax(int depth, int alpha, int beta, int ply, bool canNull) {
       sc = -negamax(newDepth, -beta, -alpha, ply + 1, true);
     } else {
       int reduction = 0;
-      if (depth >= 3 && legal >= 4 && !(flags & F_CAP) && !promo && !inCheck && !givesCheck) {
-        reduction = LMR[depth][legal];
+      if (depth >= 3 && legal >= 4 && !promo && !inCheck && !givesCheck) {
+        if (!(flags & F_CAP)) {
+          reduction = LMR[depth][legal];
+        } else if (see(mv) < 0) {
+          // A losing capture is not worth full depth unless it refutes.
+          reduction = LMR[depth][legal];
+        }
         if (reduction > newDepth - 1) reduction = newDepth - 1;
       }
       sc = -negamax(newDepth - reduction, -alpha - 1, -alpha, ply + 1, true);
@@ -1212,6 +1704,15 @@ static int negamax(int depth, int alpha, int beta, int ply, bool canNull) {
             history[hi] += depth * depth;
             if (history[hi] > (1 << 20)) history[hi] = 1 << 20;
             if (prevMv) counter[((prevMv & 127) << 7) | ((prevMv >> 7) & 127)] = (int)mv;
+          }
+          // Quiet moves that were tried and failed to raise alpha are worse
+          // than the move that cut: score them down. Skipping the last entry
+          // avoids penalising the cutoff move itself.
+          const int upto = (!(flags & F_CAP) && !promo) ? nQuiet - 1 : nQuiet;
+          for (int k = 0; k < upto; k++) {
+            int& h = history[quietHist[k]];
+            h -= depth * depth;
+            if (h < -(1 << 20)) h = -(1 << 20);
           }
           ttStore(depth, sc, 2, mv, ply);
           return sc;
@@ -1278,6 +1779,11 @@ static RootResult rootSearch(int depth, int alpha, int beta) {
       }
     }
   }
+
+  // No legal move at the root: distinguish checkmate from stalemate. Without
+  // this the score stays at -INF, which is neither a legal UCI score nor a
+  // correct game result.
+  if (res.legal == 0) res.score = attacked(kingSq[side], side ^ 1) ? -MATE : 0;
 
   return res;
 }
@@ -1379,8 +1885,9 @@ static SearchResult search(const SearchOpts& rawOpts) {
 
   // The root can already be a claimable draw. Answer immediately with score 0,
   // but only when a legal move exists: checkmate/stalemate take precedence and
-  // are handled by the normal root search below.
-  if (halfmove >= 100 || isRepetition() || insufficientMaterial()) {
+  // are handled by the normal root search below. A threefold claim requires
+  // three occurrences, not merely one earlier repetition.
+  if (halfmove >= 100 || isThreefold() || insufficientMaterial()) {
     const int n = generateMoves(0, false);
     for (int i = 0; i < n; i++) {
       const uint32_t mv = moveBuf[i];
@@ -1398,7 +1905,7 @@ static SearchResult search(const SearchOpts& rawOpts) {
         drawn.pv.push_back(drawn.bestMoveStr);
         if (threadId == 0) {
           ostringstream line;
-          line << "info depth 1 score cp 0 nodes 0 time " << drawn.time
+          line << "info depth 1 score cp 0 nodes 0 nps 0 time " << drawn.time
                << " pv " << drawn.bestMoveStr;
           emitInfo(line.str());
         }
@@ -1442,8 +1949,32 @@ static SearchResult search(const SearchOpts& rawOpts) {
     }
     if (searchStop && d > 1) break;
     if (res.legal == 0) {
-      rootScore = res.score;
-      rootBest = 0;
+      // A time-out can also leave legal == 0 after an interrupted first move,
+      // so verify that the position really has no legal move before treating
+      // it as terminal.
+      bool anyLegal = false;
+      const int nRoot = generateMoves(0, false);
+      for (int i = 0; i < nRoot && !anyLegal; i++) {
+        const uint32_t mv = moveBuf[i];
+        makeMove(mv);
+        anyLegal = !attacked(kingSq[side ^ 1], side);
+        unmakeMove(mv);
+      }
+      if (!anyLegal) {
+        // Checkmate or stalemate: report the terminal score, then 0000.
+        rootScore = res.score;
+        rootBest = 0;
+        rootDepth = 1;
+        if (threadId == 0) {
+          const i64 elapsed = max((i64)1, nowMs() - started);
+          ostringstream line;
+          line << "info depth 1 score " << scoreToUci(res.score)
+               << " nodes " << nodes
+               << " nps " << (nodes * 1000 / (u64)elapsed)
+               << " time " << elapsed;
+          emitInfo(line.str());
+        }
+      }
       break;
     }
     prevScore = res.score;
@@ -1612,6 +2143,46 @@ static bool parseBoolValue(const string& v) {
   return s == "true" || s == "1" || s == "on" || s == "yes";
 }
 
+// The generated book keeps a sound group of first moves. Personalities narrow
+// that group: only Surprise deliberately plays sound offbeat first moves, and
+// Gambit sticks to open/double-queen-pawn starts where real gambits live.
+static bool rootMoveAllowed(uint32_t mv, int style) {
+  const int from = mv & 127, to = (mv >> 7) & 127;
+  auto is = [&](int f, int t) { return from == f && to == t; };
+  const bool e4 = is(20, 52), d4 = is(19, 51), c4 = is(18, 50), nf3 = is(6, 37);
+  if (style == BOOK_SURPRISE) {
+    return e4 || d4 || c4 || nf3 ||
+           is(17, 33) || // b3
+           is(22, 38) || // g3
+           is(17, 49) || // b4
+           is(21, 53) || // f4
+           is(1, 34);    // Nc3
+  }
+  if (style == BOOK_GAMBIT) return e4 || d4;
+  return e4 || d4 || c4 || nf3;
+}
+
+// A quick, silent search used to sanity-check a book line before playing it.
+// It uses the normal search (TT and pruning included) with a small node budget
+// so it cannot stall the move; threadId -1 suppresses info output.
+static int silentScore(int budget) {
+  const int savedThread = threadId;
+  threadId = -1;
+  SearchOpts o;
+  o.nodeBudget = (u64)budget;
+  o.depth = 8;
+  SearchResult r = search(o);
+  threadId = savedThread;
+  return r.score;
+}
+
+static int bookCandidateScore(uint32_t mv, int budget) {
+  makeMove(mv);
+  const int score = -silentScore(budget);
+  unmakeMove(mv);
+  return score;
+}
+
 static uint32_t bookPick() {
   if (!ownBook || !bookAllowed || bookDepthPlies <= 0) return 0;
   if (histLen - 1 >= bookDepthPlies) return 0;
@@ -1626,10 +2197,11 @@ static uint32_t bookPick() {
   if (lo >= bookdata::ENTRY_COUNT || bookdata::ENTRIES[lo].key != h) return 0;
   const bookdata::Entry& entry = bookdata::ENTRIES[lo];
 
-  // Resolve book moves to full legal encodings, keeping their weights.
-  struct Cand { uint32_t mv; int w; };
+  // Resolve book moves to full legal encodings, keeping both the balanced
+  // weight and the weight of the selected personality.
+  struct Cand { uint32_t mv; int w; int wb; };
   Cand cands[64];
-  int cn = 0, maxW = 0;
+  int cn = 0, styleTotal = 0;
   const int legalN = generateMoves(0, false);
   for (uint32_t i = 0; i < entry.count; i++) {
     const bookdata::Move& bm = bookdata::MOVES[entry.offset + i];
@@ -1639,35 +2211,139 @@ static uint32_t bookPick() {
       if ((mv & 127) == bf && ((mv >> 7) & 127) == bt && ((mv >> 14) & 7) == bp) {
         if (cn < 64) {
           cands[cn].mv = mv;
-          cands[cn].w = bm.weight;
-          if (bm.weight > maxW) maxW = bm.weight;
+          cands[cn].w = bm.w[bookStyle];
+          cands[cn].wb = bm.w[BOOK_BALANCED] ? bm.w[BOOK_BALANCED] : 1;
           cn++;
         }
         break;
       }
     }
   }
-  if (!cn || maxW <= 0) return 0;
+  if (!cn) return 0;
+
+  // Drop anything illegal in the live position (a stored ep move, for example).
+  for (int i = 0; i < cn; i++) {
+    makeMove(cands[i].mv);
+    const bool legal = !attacked(kingSq[side ^ 1], side);
+    unmakeMove(cands[i].mv);
+    if (!legal) {
+      cands[i].w = 0;
+      cands[i].wb = 0;
+    }
+  }
+
+  // The first move must remain a real repertoire choice for the personality.
+  if (histLen == 1) {
+    for (int i = 0; i < cn; i++) {
+      if (!rootMoveAllowed(cands[i].mv, bookStyle)) {
+        cands[i].w = 0;
+        cands[i].wb = 0;
+      }
+    }
+  }
+
+  for (int i = 0; i < cn; i++) styleTotal += cands[i].w;
+  const bool fallback = styleTotal <= 0;
+  int maxW = 0;
+  for (int i = 0; i < cn; i++) {
+    if (fallback) cands[i].w = cands[i].wb;
+    if (cands[i].w > maxW) maxW = cands[i].w;
+  }
+  if (maxW <= 0) return 0;
 
   // Variety 0 keeps only the most popular book move; 100 keeps every named
-  // continuation, still weighted toward main lines.
+  // continuation, still weighted toward the personality's main lines.
   const int cutoff = (int)((i64)maxW * (100 - bookVariety) / 100);
-  int total = 0;
   for (int i = 0; i < cn; i++) {
     if (cands[i].w < cutoff) cands[i].w = 0;
-    total += cands[i].w;
+  }
+
+  BookMemorySide& mem = bookMem[side];
+  const double factor = 1.0 + 0.015 * bookDiversity;
+  int adj[64] = {0};
+  int total = 0;
+  for (int i = 0; i < cn; i++) {
+    if (cands[i].w <= 0) continue;
+    if (bookDiversity > 0) {
+      int reps = 0;
+      const u64 mk = h ^ ((u64)cands[i].mv * 0x9E3779B97F4A7C15ULL);
+      auto mit = mem.moves.find(mk);
+      if (mit != mem.moves.end()) reps += mit->second;
+      makeMove(cands[i].mv);
+      const u64 rk = bookHash(bookPositionKey());
+      unmakeMove(cands[i].mv);
+      auto rit = mem.results.find(rk);
+      if (rit != mem.results.end()) reps += rit->second;
+      if (reps > 0) {
+        double penalty = 1.0;
+        for (int k = 0; k < reps && penalty < 1e6; k++) penalty *= factor;
+        adj[i] = (int)max(1.0, floor((double)cands[i].w / penalty));
+      } else {
+        adj[i] = cands[i].w;
+      }
+    } else {
+      adj[i] = cands[i].w;
+    }
+    total += adj[i];
   }
   if (total <= 0) {
+    // Every candidate was filtered; keep the best book move rather than
+    // dropping the book entirely.
     for (int i = 0; i < cn; i++) if (cands[i].w > 0) return cands[i].mv;
-    return cands[0].mv;
+    return 0;
   }
 
   int r = (int)(bookRng() % (u64)total);
+  int chosenIdx = -1;
   for (int i = 0; i < cn; i++) {
-    if (r < cands[i].w) return cands[i].mv;
-    r -= cands[i].w;
+    if (adj[i] <= 0) continue;
+    if (r < adj[i]) { chosenIdx = i; break; }
+    r -= adj[i];
   }
-  return cands[0].mv;
+  if (chosenIdx < 0) {
+    for (int i = 0; i < cn; i++) if (adj[i] > 0) { chosenIdx = i; break; }
+  }
+  if (chosenIdx < 0) return 0;
+
+  // Search-check lines that look questionable: rare book continuations, and
+  // in the sharp personalities any non-main choice. A clearly worse move is
+  // dropped in favour of the most popular remaining book move. The margins
+  // are deliberately generous for gambits: a sound sacrifice can evaluate
+  // below a quiet line without being a mistake.
+  const int ply = histLen - 1;
+  const bool sharp = bookStyle == BOOK_AGGRESSIVE || bookStyle == BOOK_GAMBIT ||
+                     bookStyle == BOOK_SURPRISE;
+  const bool questionable = sharp
+      ? (cands[chosenIdx].w * 100 < maxW * 55)
+      : (cands[chosenIdx].w * 100 < maxW * 35);
+  if (ply >= 2 && ply <= 10 && questionable) {
+    const int budget = 5000;
+    const int rootScore = silentScore(budget);
+    const int candScore = bookCandidateScore(cands[chosenIdx].mv, budget);
+    int margin = 120;
+    if (bookStyle == BOOK_GAMBIT) margin = 300;
+    else if (bookStyle == BOOK_AGGRESSIVE) margin = 200;
+    else if (bookStyle == BOOK_SURPRISE) margin = 180;
+    if (candScore < rootScore - margin) {
+      int alt = -1;
+      for (int i = 0; i < cn; i++) {
+        if (i == chosenIdx || adj[i] <= 0) continue;
+        if (alt < 0 || cands[i].w > cands[alt].w) alt = i;
+      }
+      if (alt < 0) return 0; // no book move survived: let the search answer
+      chosenIdx = alt;
+    }
+  }
+
+  const uint32_t chosen = cands[chosenIdx].mv;
+
+  // Remember what was played, under the side that chose it.
+  makeMove(chosen);
+  const u64 resultKey = bookHash(bookPositionKey());
+  unmakeMove(chosen);
+  bumpBookCount(mem.moves, h ^ ((u64)chosen * 0x9E3779B97F4A7C15ULL));
+  bumpBookCount(mem.results, resultKey);
+  return chosen;
 }
 
 static const char* START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -1722,7 +2398,7 @@ int main(int argc, char** argv) {
     if (cmd.empty()) continue;
 
     if (cmd == "uci") {
-      emitInfo("id name KiwaChess 2.2.0");
+      emitInfo("id name KiwaChess 2.3.0");
       emitInfo("id author Kiwa");
       emitInfo("id string core C++ native");
       emitInfo("option name Threads type spin default 1 min 1 max 8");
@@ -1730,13 +2406,27 @@ int main(int argc, char** argv) {
       emitInfo("option name OwnBook type check default true");
       emitInfo("option name Book Depth type spin default 24 min 0 max 60");
       emitInfo("option name Book Variety type spin default 100 min 0 max 100");
+      emitInfo("option name Book Style type combo default Balanced var Balanced var Mainline var Aggressive var Positional var Solid var Gambit var Surprise");
+      emitInfo("option name Opening Diversity type spin default 50 min 0 max 100");
+      emitInfo("option name Random Seed type spin default 0 min 0 max 2147483647");
+      emitInfo("option name Clear Book Memory type button");
       emitInfo("option name Move Overhead type spin default 30 min 0 max 1000");
       emitInfo("option name Clear Hash type button");
       emitInfo("uciok");
     } else if (cmd == "setoption") {
       // setoption name <name, spaces allowed> [value <value>]
+      // A button is sent as `setoption name X`, and some GUIs append a bare
+      // `value` with nothing after it. Without the second form the word "value"
+      // would stay inside the name and the option would be silently ignored.
       size_t np = line.find("name ");
       size_t vp = line.find(" value ");
+      if (vp == string::npos) {
+        const string suffix = " value";
+        if (line.size() >= suffix.size() &&
+            line.compare(line.size() - suffix.size(), suffix.size(), suffix) == 0) {
+          vp = line.size() - suffix.size();
+        }
+      }
       if (np != string::npos) {
         string name = line.substr(np + 5, vp == string::npos ? string::npos : vp - (np + 5));
         string value = vp == string::npos ? "" : line.substr(vp + 7);
@@ -1762,6 +2452,15 @@ int main(int argc, char** argv) {
           bookDepthPlies = max(0, min(60, atoi(value.c_str())));
         } else if (name == "book variety") {
           bookVariety = max(0, min(100, atoi(value.c_str())));
+        } else if (name == "book style") {
+          bookStyle = parseBookStyle(value);
+        } else if (name == "opening diversity") {
+          bookDiversity = max(0, min(100, atoi(value.c_str())));
+        } else if (name == "random seed") {
+          randomSeed = max((i64)0, (i64)atoll(value.c_str()));
+          bookRng.seed(makeBookSeed());
+        } else if (name == "clear book memory") {
+          clearBookMemory();
         } else if (name == "threads") {
           threads = max(1, min(8, atoi(value.c_str())));
         }
@@ -1771,6 +2470,9 @@ int main(int argc, char** argv) {
     } else if (cmd == "ucinewgame") {
       stopSearch();
       clearTT();
+      // Opening memory deliberately survives a new game. Ageing the counts
+      // keeps recent games strongest instead of locking the repertoire.
+      ageBookMemory();
       setFen(START_FEN);
       gameFen = START_FEN;
       gameMoves.clear();
@@ -1906,6 +2608,33 @@ int main(int argc, char** argv) {
     } else if (cmd == "eval") {
       stopSearch();
       emitInfo("info string eval " + to_string(evaluate()) + " cp");
+    } else if (cmd == "bookmemory") {
+      // Diagnostic requested explicitly by a test or a GUI. Never emitted
+      // during a normal search. position_results is the count stored by the
+      // side that just moved into the current position, so a transposition
+      // reached by another move order reports the same hit.
+      stopSearch();
+      u64 wm = 0, wr = 0, bm = 0, br = 0;
+      for (const auto& e : bookMem[0].moves) wm += e.second;
+      for (const auto& e : bookMem[0].results) wr += e.second;
+      for (const auto& e : bookMem[1].moves) bm += e.second;
+      for (const auto& e : bookMem[1].results) br += e.second;
+      const u64 h = bookHash(bookPositionKey());
+      const int prev = side ^ 1;
+      const auto pr = bookMem[prev].results.find(h);
+      u64 posRes = pr == bookMem[prev].results.end() ? 0 : pr->second;
+      u64 posMoves = 0;
+      const int n = generateMoves(0, false);
+      for (int i = 0; i < n; i++) {
+        const auto it = bookMem[side].moves.find(h ^ ((u64)moveBuf[i] * 0x9E3779B97F4A7C15ULL));
+        if (it != bookMem[side].moves.end()) posMoves += it->second;
+      }
+      emitInfo("info string book memory white_moves=" + to_string((unsigned long long)wm) +
+               " white_results=" + to_string((unsigned long long)wr) +
+               " black_moves=" + to_string((unsigned long long)bm) +
+               " black_results=" + to_string((unsigned long long)br) +
+               " position_results=" + to_string((unsigned long long)posRes) +
+               " position_moves=" + to_string((unsigned long long)posMoves));
     } else if (cmd == "perft") {
       stopSearch();
       int d = 1;
