@@ -7,8 +7,8 @@
 KiwaChess is a chess engine built from scratch: a C++17 search core (0x88
 board, alpha-beta with a transposition table, hand-made evaluation) behind a
 standard UCI interface. Version 2.3.0 adds a positional evaluation (measured per node: WAC 216→223 at 100k
-nodes, for 20-40% of the search speed, and so far inside the noise of a 100-game
-duel in results), seven opening personalities with anti-repetition memory, and a
+nodes, for 25-37% of the search speed, and inside the sampling error of two
+100-game samples in results), seven opening personalities with anti-repetition memory, and a
 human-move predictor trained on 876 modern CC0 games. The rules that decide a game —
 checkmate, stalemate, castling through check, en passant, underpromotion,
 threefold repetition, the fifty-move rule and insufficient material — are
@@ -25,7 +25,7 @@ more on that at the bottom.
 
 | Area | What changed | Measured |
 |---|---|---|
-| Evaluation | Positional terms added to the native core: pawn structure (doubled, isolated, backward, connected and passed pawns with king distance), knight and bishop outposts, bishop pair and bad bishops, rook activity on open/semi-open files and the seventh with connected rooks, king pawn shield, and ray-scan mobility that ignores squares covered by an enemy pawn. Tapered, cached, switchable (`KIWA_EXTRAS`, `KIWA_MOB`) | Measured per node, **not** yet measured in results: at an equal node budget WAC went 216→223 (100k) and 235→241 (200k); the cost is 20–40% of nodes/s; the paired duels against 2.2.0 land between −28 ± 35 and +140 ± 49, i.e. **no significant strength gain is established** at 100 ms/move. Details and all five numbers in [Measured strength](#measured-strength-fast-time-control) |
+| Evaluation | Positional terms added to the native core: pawn structure (doubled, isolated, backward, connected and passed pawns with king distance), knight and bishop outposts, bishop pair and bad bishops, rook activity on open/semi-open files and the seventh with connected rooks, king pawn shield, and ray-scan mobility that ignores squares covered by an enemy pawn. Tapered, cached, switchable (`KIWA_EXTRAS`, `KIWA_MOB`) | Measured per node, and in results the verdict is flat: at an equal node budget WAC went 216→223 (100k) and 235→241 (200k); the cost is a quarter to a third of the node rate; the paired duels against 2.2.0 land between −28 ± 35 and +140 ± 49, and a 100-game anchored control against the released 2.2.0 binary puts the whole release at +4 Elo on ±52 sampling error, i.e. **no significant strength gain is established** at 100 ms/move. Details and every number in [Measured strength](#measured-strength-fast-time-control) |
 | Correctness | Repetition and the fifty-move rule now follow FIDE position identity (side to move, castling rights, and an en-passant square only when the capture is actually legal); quiescence scores mate distance only when in check with no evasions; the root distinguishes checkmate from stalemate; mate scores are normalised through the transposition table | 27 rule assertions in `test/rules.js`, including "one cycle is not a threefold draw", "castling rights split identical positions" and "a pinned ep pawn is not a legal ep"; 39/39 perft |
 | Search | Static exchange evaluation (swap list with x-rays) for capture ordering and quiescence pruning, history malus on quiet moves that fail high, late reductions on losing captures, root continuity for faster cutoffs | correctness and nodes saved, not a proven rating rise: disabling the SEE prune scored 25.5/60 (−53 ± 45) in one 60-game duel, but see Measured strength for why these intervals are wider than the differences |
 | Openings | Seven personalities (Balanced, Mainline, Aggressive, Positional, Solid, Gambit, Surprise), each with its own weight column per move; session memory that avoids repeating lines, per-colour and transposition-aware; `Random Seed` for reproducibility; a shallow search check that vetoes clearly bad book moves | 210 book games (30 per personality, 6 plies each): 13–26 distinct six-ply lines per style out of the games that reached six plies, every line legal, and no 6-ply line further than 230 cp in static evaluation |
@@ -145,8 +145,10 @@ positional block without mobility drew with 2.2.0; adding ray-scan mobility move
 the same comparison up, and giving it to rooks and queens as well as knights and
 bishops gained nothing further in a head-to-head while costing 11% more of the
 nodes per move, which is why the release stops at knights and bishops. The
-static-exchange prune appears to matter more than the whole positional block:
-switching it off moved the measurement from clearly positive to clearly negative.
+static-exchange prune looks like it matters more than the whole positional block:
+switching it off moved the same 60-game comparison from +140 ± 49 to −53 ± 45,
+which is a swing no 60-game sample should be trusted for, but it is the direction
+that repeated.
 No term is a constant bonus for owning a square class, and the phase
 interpolation is the existing one, so nothing is counted twice at one end of the
 game and again at the other.
@@ -342,7 +344,7 @@ should be consistent if the effect were large and real are spread from −28 to
 Elo, and the evaluation work sits inside that band.
 
 What *is* consistent across the measurements: the positional block costs search
-speed (20–40% of nodes/s at equal flags), and at an equal node budget it solves
+speed (25% of nodes/s at `-march=native`, 37% between the two portable exes), and at an equal node budget it solves
 more positions (WAC 223/241 at 100k/200k nodes vs 216/235 for 2.2.0 built the
 same way). So the evaluation is doing something measurable per node; whether that
 converts into results at bullet tempo on weak hardware is not demonstrated here.
@@ -383,54 +385,56 @@ laptop can finish overnight.
 
 
 
-**Absolute strength, anchored on Stockfish** (100 games, 100 ms/move, book on)
+**Absolute strength, anchored on Stockfish** (100 games each, 100 ms/move, book on,
+same 50 opening pairs, colours swapped)
 
 | Opponent | Build | Score | W/D/L | Performance Elo |
 |---|---|---|---|---|
 | Stockfish 19 at `UCI_Elo 2100`, `UCI_LimitStrength` | **2.3.0 shipped, portable build** | 67/100 = 67.0% | +63 =8 −29 | **2223 ± 37** |
+| same anchor | **2.2.0 released exe**, identical conditions | 66.5/100 = 66.5% | +64 =5 −31 | 2219 ± 37 |
 | same anchor | 2.3.0 with mobility on every K/B/R/Q | 55/100 = 55.0% | +51 =8 −41 | 2135 ± 35 |
-| same anchor | 2.2.0 (the released exe, same conditions as above) | measured alongside, see below | | |
 
-So the two ways of measuring this release disagree, and both are reported.
-Head to head against 2.2.0 with the **book off** at 100 ms/move, the shipped
-build scores 46.0% (−28 ± 35): no gain. Against the strength-limited Stockfish
-with the **book on**, it scores 67.0% where the previous version measured
-heavily below that: a large gain. The difference is the book and the sample —
-the 2.2.0 anchored number in the release history below came from 24 games in a
-different session, so it is not a like-for-like control, which is why a 100-game
-anchored run of the released 2.2.0 binary is being measured under exactly today's
-conditions and its number will replace that row when it lands. Until then the
-defensible statement is: **2.3.0 measures around 2220 on Stockfish's
-limited-strength scale at 100 ms/move with its book on, and no strength gain is
-established between the two engines' searches alone.**
+The first two rows are the like-for-like control, and they agree with the head-to-head
+duel: **+4 Elo for the whole release**, against roughly ±52 sampling error on the
+difference of two independent 100-game samples. **No strength gain is established.**
+This row is book-on, so it measures the shipped product including the new opening
+repertoire, whereas the book-off duels above isolate search and evaluation; both come
+to the same answer. The 2096 ± 72 anchored figure in the release history for 2.2.0 came
+from 24 games alternating two different anchors in an earlier session and is not
+comparable to these rows, so the released 2.2.0 binary was re-measured here against the
+2100 anchor alone — the two versions sit in the same band on the anchored scale too.
 
-The 2.2.0-era measurement in this file's history was 2096 ± 72 on the same scale
-(24 games, so much wider). Stockfish's own `UCI_Elo` calibration, this time
-control and the absence of any gauntlet are all outside the ±37.
+What the control does show is the same trade the WAC table describes. The 2.2.0 binary
+reaches mean depth 9.0 at 114,874 nodes/move; the shipped 2.3.0 reaches 8.7 at 87,233,
+about 24% fewer nodes per move because the positional block costs speed. Under a clock
+budget that is roughly a wash, which is why the honest summary of the evaluation work is
+"better at equal nodes, not better at equal time" rather than a rating increase.
 
 
 **Tactical accuracy (WAC, 300 positions with a known best move)**
 
 | Build | @100,000 nodes/move | @200,000 nodes/move | @300 ms/move | @1 s/move |
 |---|---|---|---|---|
-| 2.2.0 (source, `-march=native`) | 216/300 (72.0%) | 235/300 (78.3%) | 251/300 (83.7%) | 263/300 (87.7%) |
-| 2.2.0 (released exe, generic build) | 220/300 (73.3%) | 239/300 (79.7%) | 253/300 (84.3%) | 266/300 (88.7%) |
-| **2.3.0 shipped configuration** | 223/300 (74.3%) | 241/300 (80.3%) | 245/300 (81.7%) | 258/300 (86.0%) |
+| 2.2.0 source, `-march=native` | 216/300 (72.0%) | 235/300 (78.3%) | 246/300 (82.0%) | 263/300 (87.7%) |
+| 2.2.0 released exe, generic build | 220/300 (73.3%) | 239/300 (79.7%) | 248/300 (82.7%) | 264/300 (88.0%) |
+| **2.3.0 as shipped, generic build** | **223/300 (74.3%)** | **241/300 (80.3%)** | 247/300 (82.3%) | 258/300 (86.0%) |
+| 2.3.0 as shipped, `-march=native` | 223/300 (74.3%) | 241/300 (80.3%) | 245/300 (81.7%) | 258/300 (86.0%) |
 
-The node-budget columns are the portable release build of 2.3.0 and the matching
-2.2.0 builds; the clock columns are the same configurations built
-`-O3 -march=native`, because a clock-budget run otherwise measures the compiler
-flags rather than the engine.
+Every cell was measured one process at a time on an otherwise idle machine; the
+node-budget columns are deterministic and the two builds agree across them, so
+the clock columns are comparable within ±1 puzzle.
 
-This cuts both ways, so both halves are here. At an equal **node** budget the
-new evaluation is ahead — 223 vs 216/220 at 100k and 241 vs 235/239 at 200k —
-because a stable positional assessment lets the tactical search prune correctly.
-At an equal **clock** it solves 5–8 *fewer* puzzles: the positional block costs
-about 40% of nodes/s at the same flags, and WAC rewards depth on simple forced
+This cuts both ways, so both halves are here. At an equal **node** budget the new
+evaluation is ahead — 223 vs 216/220 at 100k and 241 vs 235/239 at 200k — because
+a stable positional assessment lets the tactical search prune correctly. At an
+equal **clock** it solves one puzzle fewer at 300 ms and five or six fewer at a
+second per move: the positional block costs a quarter of the node rate at
+`-march=native` and 37% between the two portable release exes (87,233 vs 114,874
+nodes/move in the anchored games), and WAC rewards depth on simple forced
 positions more than it rewards a better pawn structure. Same code, opposite
-verdict, depending on which resource you hold fixed. In whole games at 100 ms/move
-the same build won the controlled duel (see above), which is the number that
-corresponds to playing chess.
+verdict, depending on which resource you hold fixed — and in whole games at
+100 ms/move neither effect survives into the score, which is exactly what a
++4 ± 52 anchored control looks like.
 
 
 ## Benchmarks
@@ -444,14 +448,14 @@ not directly comparable.
 |---|---|
 | Perft suite, native (6 standard + 3 special positions) | 39/39 checks pass, including startpos d5 = 4,865,609 |
 | Perft suite, JavaScript fallback | same counts, all pass |
-| Search speed, depth-12 bench, median of 3 (`-O3 -march=native`) | 2.2.0 source 1.11 M nodes/s (652,503 nodes); 2.3.0 with the positional block but mobility off 1.14 M; 2.3.0 with mobility on every K/B/R/Q 0.55 M; **2.3.0 shipped (K/B mobility) 0.65 M nodes/s** (680,757 nodes) |
-| Search speed, portable release build (`-O3 -std=c++17 -static`, no `-march`) | 1.01–1.16 M nodes/s, 680,757 nodes at depth 12 in 0.59–0.68 s |
+| Search speed, depth-12 bench, median of 3 (`-O3 -march=native`) | 2.2.0 source 0.72 M nodes/s (652,503 nodes, spread 0.63–0.83 M); **2.3.0 shipped 0.54 M** (680,757 nodes, spread 0.52–0.55 M); 2.3.0 with mobility on every K/B/R/Q 0.54 M (667,139 nodes) — the same rate as the shipped build, which is why mobility ships on knights and bishops only |
+| Search speed, portable release build (`-O3 -std=c++17 -static`, no `-march`) | 2.2.0 released exe 0.75 M nodes/s (528,300 nodes at depth 12, ~0.7 s); **2.3.0 as shipped 0.47 M** (680,757 nodes, ~1.4 s). Run-to-run spread on this laptop is ±30%, so the ratio, not the absolute, is the reliable part |
 | Native vs JavaScript fallback, 100 ms/move, 10 games | native **7.5/10** (+7 =1 −2), alternating colours — the fallback is a safety net, not a second competitive engine |
-| Threads, depth 14 startpos (median of 3, fresh process each run) | 1 T 2.70 s; 2 T 4.45 s (0.61×); 4 T 5.19 s (0.52×); 8 T 12.03 s (0.22×) |
-| Threads, 300k nodes tactical | 1 T 360 ms; 2 T 433 ms (0.83×); 4 T 542 ms (0.66×); 8 T 1.08 s (0.33×) |
-| Threads, 300k nodes open file | 1 T 248 ms; 2 T 345 ms (0.72×); 4 T 391 ms (0.63×); 8 T 796 ms (0.31×) |
-| Threaded search sanity | every thread count returned a legal, non-empty move; no crashes or hangs; bestmove differs at 4/8 T (helpers disagree, which is expected for independent searches) |
-| Memory, depth-16 search | ~44 MB resident, identical at `Hash` 64 and 512 — the table is reserved, and only the pages a search touches become resident |
+| Threads, depth 14 startpos (fresh process per run, idle machine) | 1 T 2.18 s; 2 T 4.60 s (0.47×); 4 T 4.73 s (0.46×); 8 T 11.19 s (0.19×) |
+| Threads, 300k nodes tactical | 1 T 277 ms; 2 T 330 ms (0.84×); 4 T 541 ms (0.51×); 8 T 1.09 s (0.25×) |
+| Threads, 300k nodes open file | 1 T 274 ms; 2 T 273 ms (1.00×); 4 T 352 ms (0.78×); 8 T 895 ms (0.31×) |
+| Threaded search sanity | every thread count returned a legal, non-empty move; no crashes or hangs; the chosen move differs between thread counts (helpers search independently, so which of several near-equal moves reports first is a race) |
+| Memory, depth-16 startpos search (peak working set) | 43 MB at `Hash 64`, 295 MB at `Hash 512` — the table is allocated lazily, so a shallow search never touches the pages a deep one does |
 | Default `Threads` | **1**, because of the three rows above. This CPU has 2 physical cores; helpers duplicate work and split the hash. On a machine with more physical cores >1 can help |
 | UCI `stop` | answered at 1, 2 and 4 threads during a 1.2 s infinite search; bestmove arrives ~0.1–0.6 s after `stop` |
 | Opening personalities | 210 book games / 1,147 book plies, 7 styles; 13–26 distinct six-ply lines per 14–27 games per style; every line legal; max \|eval\| after 6 plies 230 cp; seeded runs replay identically |
@@ -568,7 +572,7 @@ node test/train-priors.js
 | No book blunders into mate | generation drops any move that allows mate in one |
 | Real `Threads` search | N independent searches with private TT slices; `stop` verified at 1, 2 and 4 threads |
 | Rules completed | insufficient material and root draw scoring; perft extended with explicit en passant, castling and underpromotion positions: 39 checks |
-| Anchored rating | 24 games vs Stockfish 19 at `UCI_Elo` 2100/2000: 13/24, joint estimate **2096 ± 72** on Stockfish's limited-strength scale (100 ms/move, this machine) |
+| Anchored rating | 24 games vs Stockfish 19 alternating `UCI_Elo` 2100 and 2000: 13/24, joint estimate **2096 ± 72** on Stockfish's limited-strength scale (100 ms/move, this machine). Not comparable to the 2.3.0 rows above — it averages two different anchors on 24 games — so the released 2.2.0 binary was re-measured against the 2100 anchor alone over 100 games; see [Measured strength](#measured-strength-fast-time-control) for that number (2219 ± 37) |
 
 </details>
 
@@ -596,7 +600,9 @@ node test/train-priors.js
   windows.
 
 Futility pruning and late-move pruning were tried in 1.3 and **rejected**: they
-saved nodes but cost tactical accuracy on WAC (223–219 vs 233/300).
+saved nodes but cost tactical accuracy on WAC (223→219 against a 233/300
+baseline). That comparison predates this release's measurement discipline and the
+logs were not kept, so read it as the reason the code is absent, not as a number.
 
 </details>
 
@@ -697,7 +703,8 @@ network.
 
 Honest gaps:
 
-- **Speed**: ~2 M nodes/s here vs tens of millions for Stockfish.
+- **Speed**: about 0.5 M nodes/s in the portable release build on this laptop,
+  against tens of millions for Stockfish.
 - **Evaluation**: handcrafted terms vs a trained neural network.
 - **Tuning**: no SPSA or large-scale self-play tuning; changes are measured on
   WAC and short matches, which have real noise.
@@ -715,8 +722,9 @@ Honest gaps:
   and it is not mind-reading.
 
 The realistic path from here, in order of measured payoff: make the positional
-terms incremental (they currently cost about half the nodes/s for the win they
-give), then a shared-TT multithreaded search, then an NNUE trained on public
+terms incremental (they currently cost a quarter to a third of the node rate for
+the win they give), then a shared-TT multithreaded search, then an NNUE trained on
+public
 data, then SPSA tuning of the term values, then long-time-control gauntlets for a
 real rating. The top single-author engines sit roughly 100 Elo behind Stockfish
 after years of exactly that work.
@@ -724,30 +732,32 @@ after years of exactly that work.
 
 ## Known limitations
 
-- **`Threads` above 1 is slower on this machine.** Measured: 2 T reaches 0.61–0.83×
-  of 1 T's speed, 4 T 0.52–0.66×, 8 T 0.22–0.33×. The design is independent
+- **`Threads` above 1 is slower on this machine.** Measured on an idle machine,
+  fresh process per run: 2 T reaches 0.47–1.00× of 1 T's speed, 4 T 0.46–0.78×,
+  8 T 0.19–0.31×. The design is independent
   searches with private hash slices (Lazy SMP), which duplicates work when there
   are fewer real cores than threads, so the default is 1. A shared-TT
   implementation is the fix, not more threads.
 - **The new evaluation costs speed.** At the same `-march=native` flags the
-  depth-12 bench median went from 1.11 M nodes/s (2.2.0 source) to 0.65 M nodes/s
-  for the shipped configuration — about 40%, most of it the ray-scan mobility and
-  the rest the structural terms. The switch is still there: `g++ ...
+  depth-12 bench median went from 0.72 M nodes/s (2.2.0 source) to 0.54 M nodes/s
+  for the shipped configuration — about 25%, and 37% between the two portable
+  release exes (0.75 M → 0.47 M). Most of it is the ray-scan mobility and the
+  rest the structural terms. The switch is still there: `g++ ...
   -DKIWA_MOB=0` drops mobility and most of the cost, `-DKIWA_EXTRAS=0` restores
   the 2.2.0 evaluation exactly. The terms are not incremental: they are
   recomputed on a cache miss keyed on the whole position, which is why they are
   expensive. Making them incremental, or replacing them with a trained
   evaluator, is the obvious next speed work.
 - **No strength gain is claimed for the new evaluation.** Five paired duels
-  against 2.2.0 spread from −28 ± 35 to +140 ± 49, which for a 60–100 game match
-  at 100 ms/move on a throttling 2-core laptop means the differences are inside
-  the noise. What is reproducible is per-node: WAC improves at a fixed node
-  budget and drops at a fixed clock, because the terms cost 20–40% of nodes/s.
+  against 2.2.0 spread from −28 ± 35 to +140 ± 49, and the 100-game anchored
+  control against the released 2.2.0 binary puts the whole release at +4 Elo on
+  ±52. For a 60–100 game match at 100 ms/move on a throttling 2-core laptop that
+  is inside the noise. What is reproducible is per-node: WAC improves at a fixed
+  node budget and drops at a fixed clock, because the terms cost 25–37% of the node rate.
   Settling it needs a few hundred games at 1 s/move or more on faster hardware.
 - **Nothing here is measured at classical time controls.** Every number in this
   README is 100 ms/move (or a node budget). Strength ordering changes with the
   time control, so treat all of it as bullet-chess evidence.
-
 - **The JavaScript fallback keeps the older evaluation.** The positional terms
   live in `native/kiwa.cpp`; `engine.js` still scores with material, PST, the
   pawn-structure hash and its older extras, and its book path has no
