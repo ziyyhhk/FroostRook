@@ -562,6 +562,20 @@ node test/train-priors.js
 ## Release history
 
 <details>
+<summary>2.3.0 (released 2026-11-01, tag `v2.3.0`)</summary>
+
+| Change | Evidence |
+|---|---|
+| Positional evaluation in the native core | pawn structure with passed-pawn/king distance, outposts, bishop pair and bad bishop, rook activity, king shield, knight+bishop mobility; WAC 216→223 at 100k nodes and 235→241 at 200k, costing 25–37% of the node rate ([Measured strength](#measured-strength-fast-time-control)) |
+| Rules and search correctness | FIDE position identity for repetition and en passant, quiescence mate distance, root checkmate vs stalemate, mate re-distancing in the TT, SEE ordering and pruning, history malus — 27 assertions in `test/rules.js`, 39/39 perft in both cores |
+| Seven opening personalities | Balanced, Mainline, Aggressive, Positional, Solid, Gambit, Surprise, each with its own weight column; 210 measured book games, 13–26 distinct six-ply lines per style, per-colour anti-repetition memory that survives `ucinewgame`, seeded reproducibility |
+| Human-move prediction | prior learned from 876 CC0 Lichess games (55,824 plies, 645/231 split); 39.3% / 66.8% / 76.1% top-1/3/5 on 1,000 held-out plies, ECE 0.085, and search stays independent of the prior |
+| Honest verdict on strength | 100 games vs Stockfish at `UCI_Elo 2100` for each build: 2223 ± 37 (2.3.0) against 2219 ± 37 (2.2.0), so **+4 ± 52 — no gain established**, alongside five paired duels spread over −28 to +140 |
+| Test and build infrastructure | `test/eval-ab.js`, `test/openings-native.js`, `test/book-fallback.js`, `test/prediction.js`, `test/thread-bench.js`, an asserting `test/stop-test.js`, and CI that builds, tests and publishes `KiwaChess.exe`, `kiwa-native.exe` and `KiwaChess-2.3.0-full.zip` |
+
+</details>
+
+<details>
 <summary>2.2.0</summary>
 
 | Change | Evidence |
