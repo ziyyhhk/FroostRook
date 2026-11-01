@@ -25,6 +25,21 @@ const DEFAULT_ENGINE = require('./native-exe');
 const SEARCH_TIMEOUT_MS = 5 * 60 * 1000;
 const HANDSHAKE_TIMEOUT_MS = 30 * 1000;
 const LABELS = ['best', 'excellent', 'good', 'inaccuracy', 'mistake', 'blunder', 'missed mate', 'missed win'];
+const MIN_MULTI_PV = 1;
+const MAX_MULTI_PV = 8;
+const DEFAULT_MULTI_PV = 3;
+
+// Every numeric threshold used by the classifier lives here so the docs and
+// the tests can quote exact values.  All values are centipawns.
+const THRESHOLDS = {
+  excellent: 10,        // 0 < loss <= 10
+  good: 50,             // 10 < loss <= 50
+  inaccuracy: 100,      // 50 < loss <= 100
+  mistake: 250,         // 100 < loss <= 250
+  winningBefore: 200,   // "the mover was winning" starts here
+  winningAfter: 50,     // below this the mover is no longer winning
+  missedWinLoss: 150,   // minimum swing for a "missed win"
+};
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -593,20 +608,151 @@ function examinePosition() {
   const inCheck = rules.inCheck();
   let terminal = null;
   if (legal.length === 0) terminal = inCheck ? 'checkmate' : 'stalemate';
-  return { legal, inCheck, terminal };
+  return {
+    legal,
+    inCheck,
+    terminal,
+    halfmove: rules.halfmove,
+    insufficient: rules.isInsufficientMaterial(),
+  };
 }
 
-function finalStatusAfterReplay(terminal, result) {
+// Draw rules, split by who can invoke them.  "Automatic" rules end the game
+// with no claim (FIDE 5.2.2 dead position, 9.6.2 seventy-five moves, 9.6.1
+// fivefold repetition); "claimable" rules only take effect when a player
+// claims, or when the PGN result records the claim.
+const DRAW_REASON = {
+  STALEMATE: 'stalemate',
+  INSUFFICIENT: 'insufficient-material',
+  FIVEFOLD: 'fivefold-repetition',
+  THREEFOLD: 'threefold-repetition',
+  SEVENTY_FIVE: 'seventy-five-move',
+  FIFTY: 'fifty-move',
+};
+
+const DRAW_STATUS = {
+  [DRAW_REASON.STALEMATE]: 'stalemate',
+  [DRAW_REASON.INSUFFICIENT]: 'draw-insufficient-material',
+  [DRAW_REASON.FIVEFOLD]: 'draw-fivefold',
+  [DRAW_REASON.THREEFOLD]: 'draw-threefold',
+  [DRAW_REASON.SEVENTY_FIVE]: 'draw-seventy-five-move',
+  [DRAW_REASON.FIFTY]: 'draw-fifty-move',
+};
+
+function emptyDrawStatus() {
+  return {
+    status: null,
+    reasons: [],
+    known: false,
+    automatic: false,
+    claimable: false,
+    claimed: false,
+    drawn: false,
+    // The native engine answers any root that is a dead position, a fivefold
+    // repetition, seventy-five moves, a claimable threefold, or a claimable
+    // fifty-move count with an instant "score cp 0" and no search.  A score
+    // from such a root says nothing about the position, so it is flagged and
+    // never used for a move label or the ACL.
+    engineShortcut: false,
+    source: 'none',
+  };
+}
+
+/*
+ * `info` needs terminal, halfmove, insufficient and repetition (how many times
+ * the current position has now occurred, including this occurrence).
+ * `claimed` says whether a claimable rule was actually invoked: for the final
+ * position of a 1/2-1/2 game the score sheet records the claim, for an
+ * intermediate position it does not (play continued).
+ */
+function drawStatusFor(info, opts) {
+  const claimed = !!(opts && opts.claimed);
+  const automaticReasons = [];
+  const claimableReasons = [];
+
+  if (info.terminal === 'stalemate') automaticReasons.push(DRAW_REASON.STALEMATE);
+  if (info.insufficient) automaticReasons.push(DRAW_REASON.INSUFFICIENT);
+  if (info.repetition >= 5) automaticReasons.push(DRAW_REASON.FIVEFOLD);
+  else if (info.repetition >= 3) claimableReasons.push(DRAW_REASON.THREEFOLD);
+  if (info.halfmove >= 150) automaticReasons.push(DRAW_REASON.SEVENTY_FIVE);
+  else if (info.halfmove >= 100) claimableReasons.push(DRAW_REASON.FIFTY);
+
+  const reasons = automaticReasons.concat(claimableReasons);
+  if (!reasons.length) return emptyDrawStatus();
+
+  const automatic = automaticReasons.length > 0;
+  const claimable = claimableReasons.length > 0;
+  return {
+    status: DRAW_STATUS[reasons[0]],
+    reasons,
+    known: true,
+    automatic,
+    claimable,
+    claimed: automatic ? true : claimed,
+    drawn: automatic || claimed,
+    engineShortcut: true,
+    source: 'rules',
+  };
+}
+
+/*
+ * FIDE repetition identity: same pieces on the same squares, same side to move,
+ * same castling rights, and the same en passant target only when an en passant
+ * capture is actually legal (9.2.2).  engine.js emits the en passant square
+ * after every double push, so it has to be filtered here.
+ */
+function repetitionKey(fen, legalUcis) {
+  const parts = fenParts(fen);
+  const board = boardFromFen(fen);
+  let ep = '-';
+  if (parts[3] !== '-') {
+    const epIdx = parseSquare(parts[3]);
+    if (epIdx >= 0 && legalUcis.some((uci) => {
+      const from = parseSquare(uci.slice(0, 2));
+      const to = parseSquare(uci.slice(2, 4));
+      const piece = board[from];
+      return to === epIdx && (piece === 'P' || piece === 'p') && (from & 7) !== (to & 7);
+    })) {
+      ep = parts[3];
+    }
+  }
+  return parts[0] + ' ' + parts[1] + ' ' + parts[2] + ' ' + ep;
+}
+
+function finalStatusFor(stateDraw, terminal, result) {
   if (terminal) return terminal;
-  if (rules.isInsufficientMaterial()) return 'draw-insufficient-material';
-  if (rules.halfmove >= 100) return 'draw-fifty-move';
-  if (rules.isThreefold()) return 'draw-threefold';
+  if (stateDraw.automatic) return stateDraw.status;
   if (result === '1-0' || result === '0-1') return result;
-  if (result === '1/2-1/2') return 'draw';
+  if (result === '1/2-1/2') return stateDraw.claimable ? stateDraw.status : 'draw';
   return 'unfinished';
 }
 
+function isDrawStatus(status) {
+  return status === 'stalemate' || String(status).startsWith('draw');
+}
+
+/*
+ * Compare the score sheet with the position the replay actually reached.
+ * "unknown" means the position does not force a result (an unfinished game, an
+ * agreed draw, or a decisive result in a position that is still playable).
+ */
+function resultConsistencyFor(finalStatus, result, sideToMove) {
+  if (result !== '1-0' && result !== '0-1' && result !== '1/2-1/2') return 'unknown';
+  if (finalStatus === 'checkmate') {
+    const expected = sideToMove === 'w' ? '0-1' : '1-0';
+    return expected === result ? 'match' : 'mismatch';
+  }
+  if (isDrawStatus(finalStatus)) {
+    return result === '1/2-1/2' ? 'match' : 'mismatch';
+  }
+  if (finalStatus === '1-0' || finalStatus === '0-1') {
+    return finalStatus === result ? 'match' : 'mismatch';
+  }
+  return 'unknown';
+}
+
 function replayGame(game) {
+  const resultDraw = game.result === '1/2-1/2';
   let before;
   try {
     rules.setFen(game.startFen);
@@ -615,9 +761,26 @@ function replayGame(game) {
     throw new PgnError(`game ${game.index}: cannot load start FEN "${game.startFen}": ${e.message}`);
   }
 
+  // Position occurrences for repetition detection.  Every occurrence is
+  // counted, including the start position, so a shuffle that returns to the
+  // start position three times is recognised.
+  const occurrences = new Map();
+  const startLegal = before.legal.map((mv) => rules.moveToStr(mv));
+  const startKey = repetitionKey(rules.getFen(), startLegal);
+  occurrences.set(startKey, 1);
+
+  const startDraw = drawStatusFor({
+    terminal: before.terminal,
+    halfmove: before.halfmove,
+    insufficient: before.insufficient,
+    repetition: 1,
+  }, { claimed: false });
+
   const moves = [];
   let stoppedAtPly = null;
   let stoppedEarly = false;
+  let repetitionBefore = 1;
+  let drawBefore = startDraw;
 
   for (let idx = 0; idx < game.moves.length; idx++) {
     const ply = idx + 1;
@@ -653,6 +816,20 @@ function replayGame(game) {
     }
 
     const after = examinePosition();
+    const fenAfter = rules.getFen();
+    const legalAfter = after.legal.map((mv) => rules.moveToStr(mv));
+    const keyAfter = repetitionKey(fenAfter, legalAfter);
+    const repetitionAfter = (occurrences.get(keyAfter) || 0) + 1;
+    occurrences.set(keyAfter, repetitionAfter);
+
+    const isLastPly = idx === game.moves.length - 1;
+    const drawAfter = drawStatusFor({
+      terminal: after.terminal,
+      halfmove: after.halfmove,
+      insufficient: after.insufficient,
+      repetition: repetitionAfter,
+    }, { claimed: resultDraw && isLastPly });
+
     moves.push({
       ply,
       moveNumber,
@@ -661,16 +838,27 @@ function replayGame(game) {
       raw: game.moves[idx].raw,
       uci,
       fenBefore,
-      fenAfter: rules.getFen(),
+      fenAfter,
       statusBefore: before.terminal,
       statusAfter: after.terminal,
+      halfmoveBefore: before.halfmove,
+      halfmoveAfter: after.halfmove,
+      repetitionBefore,
+      repetitionAfter,
+      drawBefore,
+      drawAfter,
     });
     before = after;
+    repetitionBefore = repetitionAfter;
+    drawBefore = drawAfter;
   }
 
   // The final position is whatever rules state we reached.  If the loop
   // stopped because the position was already terminal, that is the status.
-  const finalStatus = finalStatusAfterReplay(before.terminal, game.result);
+  const finalDraw = moves.length ? moves[moves.length - 1].drawAfter : startDraw;
+  const finalStatus = finalStatusFor(finalDraw, before.terminal, game.result);
+  const finalFen = moves.length ? moves[moves.length - 1].fenAfter : game.startFen;
+  const resultConsistency = resultConsistencyFor(finalStatus, game.result, fenParts(finalFen)[1]);
 
   return {
     index: game.index,
@@ -680,6 +868,8 @@ function replayGame(game) {
     result: game.result,
     moves,
     finalStatus,
+    finalDraw,
+    resultConsistency,
     stoppedAtPly,
     stoppedEarly,
   };
@@ -750,6 +940,39 @@ function chooseBestInfo(infos) {
   return best;
 }
 
+// One deepest line per MultiPV rank.  When the option is 1 the engine omits
+// "multipv" and every scored line is rank 1.  Scores of ranks that could not
+// enter the reported set are not emitted, so the returned array may be shorter
+// than the requested count in a short search.
+function chooseLines(infos, limit) {
+  const byRank = new Map();
+  for (const info of infos) {
+    if (!info || !info.score) continue;
+    const rank = info.multipv === null ? 1 : info.multipv;
+    if (!Number.isInteger(rank) || rank < 1 || rank > limit) continue;
+    const prev = byRank.get(rank);
+    const depth = info.depth === null ? -1 : info.depth;
+    const prevDepth = prev && prev.depth !== null ? prev.depth : -1;
+    if (!prev || depth >= prevDepth) byRank.set(rank, info);
+  }
+  const out = [];
+  for (const rank of [...byRank.keys()].sort((a, b) => a - b)) {
+    const info = byRank.get(rank);
+    const ev = scoreToEval(info.score);
+    out.push({
+      rank,
+      cp: ev.cp,
+      mateIn: ev.mateIn,
+      terminal: ev.terminal,
+      pv: info.pv.slice(),
+      bestUci: info.pv.length ? info.pv[0] : null,
+      depth: info.depth,
+      nodes: info.nodes,
+    });
+  }
+  return out;
+}
+
 function scoreToEval(score) {
   if (score.type === 'cp') {
     return { cp: score.value, mateIn: null, terminal: null, source: 'search' };
@@ -807,6 +1030,7 @@ class UciEngine {
     this.closed = false;
     this.exitInfo = null;
     this.id = { name: null, author: null, lines: [] };
+    this.multiPv = 1;
   }
 
   start() {
@@ -959,7 +1183,11 @@ class UciEngine {
     return 'position fen ' + startFen + suffix;
   }
 
-  async search(startFen, moves, budget) {
+  async search(startFen, moves, budget, multipv = 1) {
+    if (multipv !== this.multiPv) {
+      this.send(`setoption name MultiPV value ${multipv}`);
+      this.multiPv = multipv;
+    }
     this.send(this.positionCommand(startFen, moves));
     this.send('isready');
     await this.waitFor((line) => line === 'readyok', HANDSHAKE_TIMEOUT_MS, 'readyok before go');
@@ -996,6 +1224,7 @@ class UciEngine {
     const evalScore = scoreToEval(info.score);
     const pv = info.pv.slice();
     const pvFirst = pv.length ? pv[0] : null;
+    const lines = chooseLines(infos, multipv);
     return {
       cp: evalScore.cp,
       mateIn: evalScore.mateIn,
@@ -1006,6 +1235,7 @@ class UciEngine {
       depth: info.depth,
       nodes: info.nodes,
       multipv: info.multipv,
+      lines,
       bestmove,
     };
   }
@@ -1142,6 +1372,7 @@ function flipEval(e) {
 async function analyzeReplay(replay, opts, engine, engineId) {
   const endPly = opts.maxPlies == null ? Infinity : opts.startPly + opts.maxPlies - 1;
   const movesOut = [];
+  const multipv = opts.multipv == null ? 1 : opts.multipv;
 
   for (let i = 0; i < replay.moves.length; i++) {
     const m = replay.moves[i];
@@ -1152,6 +1383,8 @@ async function analyzeReplay(replay, opts, engine, engineId) {
       san: m.san,
       uci: m.uci,
       analyzed: false,
+      drawBefore: m.drawBefore,
+      drawAfter: m.drawAfter,
     };
     const inRange = m.ply >= opts.startPly && m.ply <= endPly;
     if (!inRange) {
@@ -1163,10 +1396,11 @@ async function analyzeReplay(replay, opts, engine, engineId) {
 
     let evalBefore;
     let bestUci = null;
+    let candidates = [];
     if (m.statusBefore === 'checkmate' || m.statusBefore === 'stalemate') {
       evalBefore = terminalEval(m.statusBefore);
     } else {
-      const beforeResult = await engine.search(replay.startFen, prior, opts.budget);
+      const beforeResult = await engine.search(replay.startFen, prior, opts.budget, multipv);
       evalBefore = {
         cp: beforeResult.cp,
         mateIn: beforeResult.mateIn,
@@ -1176,6 +1410,7 @@ async function analyzeReplay(replay, opts, engine, engineId) {
         pv: beforeResult.pv,
       };
       bestUci = beforeResult.bestUci;
+      candidates = beforeResult.lines;
     }
 
     let evalAfter;
@@ -1185,7 +1420,8 @@ async function analyzeReplay(replay, opts, engine, engineId) {
       const afterResult = await engine.search(
         replay.startFen,
         prior.concat(m.uci),
-        opts.budget
+        opts.budget,
+        multipv
       );
       evalAfter = {
         cp: afterResult.cp,
@@ -1210,11 +1446,14 @@ async function analyzeReplay(replay, opts, engine, engineId) {
     const aclSample = evalBefore.mateIn === null &&
       evalAfter.mateIn === null &&
       !m.statusBefore &&
-      !m.statusAfter;
+      !m.statusAfter &&
+      !(m.drawBefore && m.drawBefore.engineShortcut) &&
+      !(m.drawAfter && m.drawAfter.engineShortcut);
 
     movesOut.push(Object.assign(base, {
       analyzed: true,
       bestUci,
+      candidates,
       evalBefore,
       evalAfter,
       moverCpBefore,
@@ -1235,6 +1474,8 @@ async function analyzeReplay(replay, opts, engine, engineId) {
     startFen: replay.startFen,
     result: replay.result,
     finalStatus: replay.finalStatus,
+    finalDraw: replay.finalDraw,
+    resultConsistency: replay.resultConsistency,
     stoppedEarly: replay.stoppedEarly,
     stoppedAtPly: replay.stoppedAtPly,
     analysisRange: {
@@ -1300,6 +1541,15 @@ function renderGameHuman(game) {
     `Analyzed plies ${game.analysisRange.startPly}-${rangeEnd} ` +
     `of ${game.analysisRange.totalPlies} | Final status: ${game.finalStatus}`
   );
+  if (game.finalDraw && game.finalDraw.known) {
+    lines.push(
+      `Draw rule: ${game.finalDraw.reasons.join(', ')} ` +
+      `(${game.finalDraw.automatic ? 'automatic' : 'claimable'})`
+    );
+  }
+  if (game.resultConsistency && game.resultConsistency !== 'unknown') {
+    lines.push(`Score sheet vs position: ${game.resultConsistency}`);
+  }
   if (game.stoppedEarly) {
     lines.push(`Stopped early at ply ${game.stoppedAtPly}: the position was already terminal.`);
   }
@@ -1330,6 +1580,14 @@ function renderGameHuman(game) {
       padded(formatEval(afterMoverPov), 13) +
       padLeft(m.loss, 5) + '  ' + m.label
     );
+    if (m.candidates && m.candidates.length > 1) {
+      const alts = m.candidates.map((c) => {
+        const ev = formatEval({ cp: c.cp, mateIn: c.mateIn, terminal: c.terminal });
+        const pv = c.pv.slice(0, 6).join(' ');
+        return `${c.rank}. ${ev} ${pv}`;
+      });
+      lines.push('      lines: ' + alts.join(' | '));
+    }
   }
 
   lines.push('');
@@ -1363,6 +1621,7 @@ function renderHuman(doc, opts) {
   const chunks = [];
   chunks.push(`Engine: ${doc.engine.name || '(unknown)'} | Budget: ${doc.budget.mode} ${doc.budget.value}`);
   chunks.push(`PGN: ${doc.options.pgn}`);
+  chunks.push(`Candidate lines per position: ${doc.options.multipv}`);
   if (doc.options.startPly !== 1 || doc.options.maxPlies !== null) {
     chunks.push(`Range: start-ply ${doc.options.startPly}, max-plies ${doc.options.maxPlies == null ? 'all' : doc.options.maxPlies}`);
   }
@@ -1381,7 +1640,7 @@ function renderHuman(doc, opts) {
 const USAGE = [
   'Usage:',
   '  node analyze.js --pgn path.pgn [--game N] [--depth 12] [--nodes 100000]',
-  '                  [--engine path] [--json out.json] [--quiet]',
+  '                  [--multipv 3] [--engine path] [--json out.json] [--quiet]',
   '                  [--start-ply N] [--max-plies N]',
   '',
   'Options:',
@@ -1389,6 +1648,7 @@ const USAGE = [
   '  --game N          analyze only game N (1-based; default: all games)',
   '  --depth N         search depth (default 12)',
   '  --nodes N         node budget; mutually exclusive with --depth',
+  '  --multipv N       candidate lines per position, 1-8 (default 3)',
   '  --engine PATH     UCI engine executable (default: native/FroostRook.exe,',
   '                    or FROOSTROOK_ENGINE if set)',
   '  --json PATH       write structured JSON to PATH (not printed)',
@@ -1420,6 +1680,7 @@ function parseArgs(argv) {
     quiet: false,
     startPly: 1,
     maxPlies: null,
+    multipv: DEFAULT_MULTI_PV,
     help: false,
   };
   let depthGiven = false;
@@ -1454,6 +1715,12 @@ function parseArgs(argv) {
     } else if (arg === '--nodes') {
       opts.nodes = parsePositiveInt(takeValue(), '--nodes');
       nodesGiven = true;
+    } else if (arg === '--multipv') {
+      const n = parsePositiveInt(takeValue(), '--multipv');
+      if (n < MIN_MULTI_PV || n > MAX_MULTI_PV) {
+        throw new UsageError(`--multipv must be between ${MIN_MULTI_PV} and ${MAX_MULTI_PV}, got "${n}"`);
+      }
+      opts.multipv = n;
     } else if (arg === '--engine') {
       opts.engine = takeValue();
     } else if (arg === '--json') {
@@ -1571,6 +1838,7 @@ async function main(argv) {
         game: opts.game,
         startPly: opts.startPly,
         maxPlies: opts.maxPlies,
+        multipv: opts.multipv,
       },
       games: gameDocs,
     };

@@ -7,8 +7,12 @@ it has no runtime DLL dependencies.
 
 ```
 cd native
-g++ -O3 -std=c++17 -static -o FroostRook.exe kiwa.cpp
+windres app.rc -O coff -o app.o
+g++ -O3 -std=c++17 -static -o FroostRook.exe kiwa.cpp app.o
 ```
+
+`app.rc` embeds the approved icon (`assets/engine-icon.ico`) and the Windows
+version resource.
 
 This is the portable build used for release: it targets generic x86-64 and does
 not require a specific CPU generation. `native/build.bat` does the same with the
@@ -18,7 +22,7 @@ old scripts.
 For local play you can build a faster machine-specific binary:
 
 ```
-g++ -O3 -march=native -std=c++17 -static -o FroostRook.exe kiwa.cpp
+g++ -O3 -march=native -std=c++17 -static -o FroostRook.exe kiwa.cpp app.o
 ```
 
 `-march=native` enables AVX2 and other instructions available on the build

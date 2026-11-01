@@ -1,6 +1,6 @@
 {
   "name": "froostrook",
-  "version": "1.0.0-beta",
+  "version": "1.0.1-beta",
   "private": true,
   "description": "FroostRook 1 Beta: from-scratch chess engine with C++17 search core, JavaScript front-end, opening personalities, human move prediction and PGN analysis",
   "scripts": {

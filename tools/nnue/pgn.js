@@ -516,6 +516,14 @@ function parseHeaders(block) {
   return { headers, movetext: lines.slice(i).join('\n') };
 }
 
+/**
+ * Headers + raw movetext without replaying the moves. Used by the dataset
+ * builder to filter thousands of games cheaply before paying for SAN replay.
+ */
+function parseGameMeta(block) {
+  return parseHeaders(block);
+}
+
 function tokenizeMovetext(text) {
   const clean = stripComments(text);
   return clean
@@ -652,6 +660,6 @@ module.exports = {
   F_CAP, F_EP, F_CASTLE, F_DOUBLE,
   newBoard, setFen, getFen, makeMove, unmakeMove, generateLegal, generatePseudo,
   isAttacked, inCheck, applyUci, moveToUci, moveFrom, moveTo, movePromo, moveFlags,
-  squareName, sanToMove, parseGames, parseGame, splitGameBlocks, tokenizeMovetext,
-  featureIndex, featuresFor, perft,
+  squareName, sanToMove, parseGames, parseGame, parseGameMeta, splitGameBlocks,
+  tokenizeMovetext, featureIndex, featuresFor, perft,
 };

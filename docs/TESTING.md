@@ -10,10 +10,16 @@ No Elo, speed or accuracy figure is estimated or extrapolated.
   Windows 10 Home Single Language 10.0.19045, 8 GB RAM.
 - Toolchain: MSYS2 UCRT64 g++ 16.2.0 (`-O3 -std=c++17 -static`), Node.js
   v24.21.0.
-- Engine under test: `FroostRook.exe`, the same C++17 source built by CI.
-  Local binary size 4,419,761 bytes; UCI id `FroostRook 1 Beta`.
-- Baseline: `kiwa-2.3.0-baseline.exe`, the published 2.3.0 release asset,
-  byte-identical to the previous release download.
+- Engine under test: `FroostRook.exe` built with the same generic x86-64
+  command CI uses (`-O3 -std=c++17 -static`, no `-march=native`). Measurement
+  binary 4,633,795 bytes, SHA-256
+  `e98d46ad12785e7230cdcb490e5a4ad34db2d156c3e8b7a07500a2cbb85b3a6a`;
+  UCI id `FroostRook 1 Beta`. A rebuild with the same source and flags is not
+  byte-identical because the resource/linker timestamps change, so the
+  CI-built asset's hash can differ.
+- Baselines: `fr1-release.exe`, the published `v1.0.0-beta` asset, SHA-256
+  `4a64a22eb35b02b3f82a52ec15b3e47b29cbb4f11854e4baf43f24fe0dd3d6b2`;
+  and `kiwa-2.3.0-baseline.exe`, the published 2.3.0 asset.
 - Opponent: Stockfish 19 (`stockfish-windows-x86-64-universal.exe`),
   `UCI_LimitStrength=true`, `UCI_Elo=2200`, 1 thread, 16 MB hash.
 
@@ -36,7 +42,7 @@ by both sides, but it can still change the effective time control.
 | Stop during `go infinite` / `go movetime`, 1/2/4 threads | pass |
 | Opening book native suite | 140 games, 766 book plies, 7 personalities |
 | Book fallback suite | 49 games, 0 illegal answers |
-| PGN analyzer regression | 42 checks, 0 failures |
+| PGN analyzer regression | 62 checks, 0 failures |
 
 Perft start position depth 5 = **4,865,609** nodes in both generators. The
 suite also covers Kiwipete (4,085,603 at depth 4), positions 3–6, a dedicated
@@ -60,21 +66,28 @@ setoption name MultiPV value 3 + go depth 6
 ## 2. Speed and NPS
 
 Workload: `FroostRook.exe bench 12` — fixed depth 12 from the start position,
-64 MB hash, one thread. Seven runs per build, idle machine. `bench` reports
-search nodes, wall time, process CPU time (new build) and NPS.
+64 MB hash, one thread. Nine interleaved runs per build on an idle machine,
+reported as medians with observed ranges. `bench` reports search nodes, wall
+time, process CPU time (new builds) and NPS.
 
-| Build | nodes | wall time (range) | median | wall NPS | CPU time (new build) | CPU NPS |
-| --- | --- | --- | --- | --- | --- | --- |
-| KiwaChess 2.3.0 | 680,757 | 0.724–0.780 s | 739 ms | 0.873–0.940 M | not instrumented | — |
-| FroostRook 1 Beta | 590,750 | 0.668–0.694 s | 681 ms | 0.851–0.884 M | 0.579–0.657 s | 0.899–1.020 M |
+| Build | nodes | wall time median (range) | wall NPS median (range) | CPU NPS median |
+| --- | --- | --- | --- | --- |
+| KiwaChess 2.3.0 | 680,757 | 702 ms (664–768) | 0.970 M (0.886–1.025) | not instrumented |
+| FroostRook 1.0.0-beta | 590,750 | 630 ms (605–707) | 0.938 M (0.836–0.976) | 0.995 M |
+| FroostRook 1.0.1-beta | 567,818 | 621 ms (593–639) | 0.914 M (0.889–0.958) | 0.956 M |
 
-Both builds return `b1c3` with score `cp 8` at depth 12. The new build uses
-13.2% fewer nodes and 7.8% less wall time to the same depth; raw wall NPS is
-5.8% lower.
+All builds return `b1c3` with score `cp 8` at depth 12.
+
+Against 2.3.0 the patch still has 5.7% lower raw NPS, but reaches the same
+depth in 11.5% less wall time because it visits 16.6% fewer nodes. Against
+1.0.0-beta it visits 3.9% fewer nodes and reaches depth 12 in 1.4% less time;
+wall NPS is 2.5% lower and CPU NPS 3.9% lower, consistent with the cost of
+SEE-ordered captures. Nine runs still leave several percent of run-to-run
+variation, so these are small effects, not precise constants.
 
 Note on the historical regression: the 2.3.0 notes recorded 0.75 → 0.47 M
 (portable) and 0.72 → 0.54 M (native). The 2.3.0 binary in this repository
-does **not** reproduce 0.47 M on the current bench; it measures 0.87–0.94 M.
+does **not** reproduce 0.47 M on the current bench; it measures 0.886–1.025 M.
 The old figures were produced with a different bench and/or machine state and
 are not comparable. This report only compares same-bench, idle runs. It makes
 no claim of recovering the 0.75 M figure.
@@ -101,19 +114,26 @@ because it shaped the final build.
 `test/wac-native.js`, 300 positions, one process per engine, same hardware.
 The fixed-node run is deterministic; the clock run is not.
 
-| Budget | KiwaChess 2.3.0 | FroostRook 1 Beta |
-| --- | --- | --- |
-| 100,000 nodes/move | 223/300 (74.3%) | 238/300 (79.3%) |
-| 100 ms/move | 229/300 (76.3%) | 235/300 (78.3%) |
+| Budget | KiwaChess 2.3.0 | 1.0.0-beta | 1.0.1-beta |
+| --- | --- | --- | --- |
+| 100,000 nodes/move | 223/300 (74.3%) | 238/300 (79.3%) | 248/300 (82.7%) |
+| 100 ms/move, median of 3 | 236/300 (78.7%) | 234/300 (78.0%) | 241/300 (80.3%) |
 
-The +15 at fixed nodes is the clearest measured effect of the search changes.
+The patch removes internal iterative reduction and orders captures by SEE.
+The fixed-node run is deterministic and is the cleanest signal: +25 over 2.3.0
+and +10 over 1.0.0-beta. The 100 ms runs were 2.3.0 236/232/236, 1.0.0-beta
+236/233/234 and 1.0.1-beta 241/242/239. The timed gain over 1.0.0-beta (+7) is
+smaller than the fixed-node gain and within the fixture's spread, so it is not
+treated as a rating result.
+
 WAC is a tactics fixture, not a playing-strength rating.
 
 ## 4. Strength matches
 
 All matches are paired: each opening is played twice with colours swapped.
 Adjudication is checkmate, stalemate, threefold, 50-move, dead material, or a
-300-ply cap scored as a draw. Both engines get the same fixed 100 ms/move.
+300-ply cap scored as a draw. Both engines get the same fixed time control
+within a match (60 ms/move for the patch duel, 100 ms/move for the anchors).
 Error is 1σ sampling error from the binomial score (173.7/√(n·p·(1−p)));
 95% intervals multiply that by 1.96. These intervals cover game noise only.
 
@@ -144,14 +164,55 @@ An earlier 120-game match of the rejected aggressive variant scored 54.6%
 - Performance Elo **2261** vs 2200 (1σ ±56, 95% CI 2151–2371).
 - Mean depth 7.4 vs Stockfish 21.4; 59,386 vs 32,636 nodes/move.
 
+### 4.4 Patch search build vs 1.0.0-beta (240 games)
+
+- 120 opening pairs = 240 games, book off, 60 ms/move, colours swapped.
+- New build (IIR removed, SEE capture ordering) 127.5/240
+  (+103 =49 −88) = **53.1%**.
+- Elo difference **+22**, 1σ ±22, 95% CI **−22 to +66**.
+- Colour split: 67.5/120 as White (56.3%), 60/120 as Black (50.0%).
+- Mean reported depth 8.2 vs 8.5; 33,989 vs 38,182 nodes/move.
+- Outcomes: checkmate 191, threefold 27, dead material 17, 50-move 2,
+  300-ply cap 3. Mean game length 139.7 plies, 8.1 s wall.
+- The new side is the pre-icon candidate binary. The final source differs only
+  by removing compile-time experiment switches and embedding the icon; at
+  100,000 nodes both binaries solve exactly the same WAC positions, and both
+  visit 567,818 nodes at bench depth 12.
+- PGN: `.build/duel-niir-see.pgn` (local run; not shipped).
+
+### 4.5 Patch vs Stockfish `UCI_Elo 2200` (120 games)
+
+- 60 paired openings = 120 games, book on, 100 ms/move, colours swapped.
+- Final generic x86-64 binary (same build flags as CI): 56.5/120
+  (+48 =17 −55) = **47.1%**.
+- Performance Elo **2180** vs the 2200 anchor (1σ ±32, 95% CI 2117–2243).
+- Colour split: 30.5/60 as White (50.8%), 26/60 as Black (43.3%).
+- Mean reported depth 9.0 vs Stockfish 19.9; 57,715 vs 43,500 nodes/move.
+- Outcomes: checkmate 103, 300-ply cap 11, 50-move 2, threefold 4. Mean game
+  length 138.8 plies, 13.0 s wall.
+- The 1.0.0-beta control on the same anchor was 2209 (2101–2317, 40 games).
+  The patch's point estimate is 29 Elo lower, with heavily overlapping
+  intervals. This does not show a regression either; it simply does not
+  confirm the duel's positive sign.
+
 ### What the matches mean
+
+The 240-game patch comparison is the largest sample and points to +22 Elo, but
+its 95% interval (−22 to +66) includes zero. Against the Stockfish anchor the
+same patch measured 2180, 29 points below the previous release's 2209 point
+estimate and well inside its interval. The two measurements disagree in sign,
+which is what samples of this size do when the true difference is small.
+**The patch has not demonstrated a strength gain; the honest summary is "no
+regression proven, possible small gain, possible small loss".** The colour
+split (56.3% White vs 50.0% Black in the duel) also shows that part of the
+score is a first-move effect.
 
 The 1 Beta and 2.3.0 point estimates on the anchor differ by 52 Elo, and the
 95% intervals overlap by a wide margin. The direct 40-game comparison is +9
 Elo with an interval spanning roughly ±107. **Neither result demonstrates a
 strength increase.** The sample cannot resolve differences below about 100 Elo
-at 95% confidence, and all games are 100 ms/move bullet chess on two cores.
-No 3000 Elo claim is made; nothing here supports one.
+at 95% confidence, and all games are bullet chess on two cores. No 3000 Elo
+claim is made; nothing here supports one.
 
 The absolute anchored number is a performance estimate on Stockfish's
 `UCI_Elo` scale. Stockfish's limited-strength calibration is an unknown, so it
@@ -183,9 +244,10 @@ Summary of independently rerun checks:
 - quantized validation MSE 0.214706 vs float 0.214711;
 - validation MSE 0.2147 beats a constant predictor (0.2234) but loses to a
   two-parameter material baseline (0.2044); queen-up probe evaluates +12 cp;
-- native inference: about 7.8 µs per full refresh and 3.7 µs per incremental
-  evaluation when run alone (the agent's repeated runs ranged 70k–128k full
-  refreshes/s and 148k–283k incremental/s).
+- native inference: 5.2 µs per full refresh and 2.3 µs per incremental
+  evaluation in the latest run (194k / 432k per second). Repeated runs varied
+  widely with machine load: about 70k–194k full refreshes/s and 148k–467k
+  incremental/s.
 
 The evaluator is **not compiled into the playing engine and not used in any
 match above**. The playing engine always uses the handcrafted evaluator; that
@@ -193,10 +255,14 @@ is the fallback by construction, not a switchable option.
 
 ## 7. PGN analysis
 
-`node test/analyze-test.js` runs 42 checks and passes. It verifies:
+`node test/analyze-test.js` runs 62 checks and passes. It verifies:
 
 - every label follows from the before/after scores at the same budget;
 - terminal mate scores and missed-mate labels;
+- threefold, fifty-move, fivefold, 75-move and dead-position draws, plus
+  claimable-vs-automatic status and score-sheet consistency;
+- MultiPV candidate lines: deepest line per rank, distinct and ordered, and
+  `--multipv` bounds;
 - no "brilliant" or accuracy percentage is invented;
 - comments, variations and malformed SAN do not corrupt the move list;
 - castling, en passant and all promotion spellings parse;
@@ -224,10 +290,15 @@ disabled by default so both engines play the same opening pairs from move one.
 
 ## 9. Known gaps
 
-- Bullet only (100 ms/move). No longer-time-control match was run.
-- 40–120 game samples; confidence intervals are wide.
+- Bullet only (60–100 ms/move). No longer-time-control match was run.
+- 40–240 game samples; confidence intervals are wide. The 240-game duel and
+  the 120-game anchor disagree in sign for the patch.
+- The 120-game anchor used the final source; the 240-game duel used an earlier
+  build of the same search code (identical fixed-node WAC results and bench
+  node count) without the Windows icon resource.
 - One opponent setting (Stockfish 19 `UCI_Elo 2200`) plus self-play.
 - No independent third-party testing, no CCRL submission.
 - Threads > 1 are slower on this hardware.
 - The NNUE is experimental and not integrated.
-- The icon is an AI-generated placeholder; see `assets/README.md`.
+- The icon is the approved supplied artwork with a derived transparent mask;
+  see `assets/README.md`.

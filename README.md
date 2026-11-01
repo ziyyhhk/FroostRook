@@ -1,6 +1,6 @@
 # FroostRook 1 Beta
 
-<img src="assets/froostrook.png" alt="FroostRook 1 Beta" width="200" align="right">
+<img src="assets/engine-icon.png" alt="FroostRook 1 Beta" width="200" align="right">
 
 FroostRook 1 Beta is a from-scratch chess engine: a C++17 search core with a
 handcrafted evaluator, a Node.js front-end, an embedded opening repertoire, a
@@ -11,7 +11,7 @@ This is the repository formerly named `ziyyhhk/kiwa-engine`. GitHub redirects
 the old URL and keeps the history, tags and releases.
 
 > **Name and version:** the public engine name is exactly **FroostRook 1 Beta**
-> (capital F, R and B). `1.0.0-beta` is the package version used in archives.
+> (capital F, R and B). `1.0.1-beta` is the package version used in archives.
 > The UCI handshake returns `id name FroostRook 1 Beta`.
 
 ## Contents
@@ -56,28 +56,46 @@ node analyze.js --pgn game.pgn --depth 12
 
 ## What changed in 1 Beta
 
-- **Search:** internal iterative reduction and futility pruning of quiet moves,
-  a pawn-attack cache that survives across evaluations, and ep keys only when
-  a legal ep capture exists. At depth 12 from the start position the engine
-  visits 13.2% fewer nodes and finishes 7.8% sooner than 2.3.0. In a 40-game
-  head-to-head it scored 51.3% (+9 Elo, 95% CI −99 to +116): **the playing
-  strength is approximately unchanged**, not a measured gain.
+- **Search (patch 1.0.1-beta):** internal iterative reduction was **removed**
+  after A/B testing showed it cost tactics without a node win, and captures are
+  now ordered by SEE instead of MVV-LVA. At depth 12 from the start position
+  the current build visits 567,818 nodes, versus 590,750 for 1.0.0-beta and
+  680,757 for 2.3.0. On WAC at 100,000 nodes it solves 248/300, versus 238 for
+  1.0.0-beta and 223 for 2.3.0. At 100 ms the medians of three runs are
+  241/300 for the patch, 234 for 1.0.0-beta and 236 for 2.3.0; timed WAC is
+  noisy, so the fixed-node run is the cleaner tactical signal. Match evidence
+  is in [Measured results](#measured-results).
+- **Search (1.0.0-beta baseline):** futility pruning of quiet moves, a
+  pawn-attack cache that survives across evaluations, and ep keys only when a
+  legal ep capture exists.
 - **MultiPV:** real multipv 1–8 output with ordered, distinct root lines, and
   `bestmove` always equal to line 1. MultiPV searches run single-threaded.
 - **Analysis:** new `analyze.js` PGN analyzer with consistent before/after
   evaluation at the same budget, disclosed move labels, ACL, JSON output and a
-  42-check regression suite.
+  42-check regression suite. Patch `1.0.1-beta` adds threefold/fifty-move/
+  dead-position recognition with score-sheet consistency checks, up to eight
+  MultiPV candidate lines per position, and grows the suite to 62 checks.
 - **Identity:** engine, front-end, package, docs and CI now identify as
   FroostRook 1 Beta; the GitHub repository was renamed in place.
+- **Branding (patch 1.0.1-beta):** the approved frozen-rook artwork is now the
+  README logo, Windows executable icon (16–256 px, transparent outside the
+  rounded square), documentation mark and a 1280×640 social-preview image.
 - **NNUE:** a trained prototype (trainer, quantized net, metrics, self-test)
   lives in `tools/nnue` and `data/nnue`. It is **not integrated** and is not
-  used for play; its measured quality is below the handcrafted evaluator. See
+  used for play; its measured quality is below the handcrafted evaluator. The
+  patch adds a reproducible Lichess-dump dataset builder, but the shipped net
+  was **not** retrained on it. See
   [the prototype section](#nnue-prototype-experimental).
-- **NPS:** on an idle machine the depth-12 bench measures 0.87 M nodes/s for
-  1 Beta and 0.92 M for 2.3.0. The 0.47 M figure in the 2.3.0 notes could not
-  be reproduced with this bench and is not used as a baseline; raw NPS is 6%
-  lower while time-to-depth is 8% lower. No evaluation terms were removed.
-  See [docs/TESTING.md](docs/TESTING.md) for the full method.
+- **NPS and time-to-depth (patch 1.0.1-beta):** nine interleaved depth-12
+  bench runs on an idle machine give 0.914 M nodes/s / 621 ms for the patch,
+  0.938 M / 630 ms for 1.0.0-beta, and 0.970 M / 702 ms for 2.3.0. Raw NPS is
+  still 5.7% below 2.3.0, but the patch reaches depth 12 in 11.5% less time
+  because it visits 16.6% fewer nodes. Against 1.0.0-beta it uses 3.9% fewer
+  nodes and is 1.4% faster to the same depth; NPS is 2.5% lower, consistent
+  with the cost of SEE capture ordering. No evaluation terms were removed and
+  no strength was traded for NPS. The 0.47 M figure in the 2.3.0 notes could
+  not be reproduced with this bench and is not used as a baseline. See
+  [docs/TESTING.md](docs/TESTING.md) for the full method.
 
 ## Engine and UCI
 
@@ -138,26 +156,27 @@ control results, not a rating. Sample-error intervals cover game noise only.
 
 ### Search and speed
 
-Depth-12 bench from the start position, portable builds (`FroostRook.exe`),
-seven runs each on an otherwise idle machine. NPS is process wall time here;
-the engine also reports CPU-time NPS (1 Beta: 0.90–1.02 M, median 0.92 M):
+Depth-12 bench from the start position, portable generic x86-64 builds, nine
+interleaved runs each on an otherwise idle machine:
 
-| Build | nodes | wall time | CPU time | wall NPS |
+| Build | nodes | wall time median (range) | CPU NPS median | wall NPS median (range) |
 | --- | --- | --- | --- | --- |
-| KiwaChess 2.3.0 baseline | 680,757 | 0.724–0.780 s | not instrumented | 0.87–0.94 M |
-| FroostRook 1 Beta | 590,750 | 0.668–0.694 s | 0.579–0.657 s | 0.85–0.88 M |
+| KiwaChess 2.3.0 baseline | 680,757 | 702 ms (664–768) | not instrumented | 0.970 M (0.886–1.025) |
+| FroostRook 1.0.0-beta | 590,750 | 630 ms (605–707) | 0.995 M | 0.938 M (0.836–0.976) |
+| FroostRook 1.0.1-beta | 567,818 | 621 ms (593–639) | 0.956 M | 0.914 M (0.889–0.958) |
 
-Medians: 681 ms vs 739 ms, 590,750 vs 680,757 nodes. The shipped build visits
-13.2% fewer nodes and reaches the same depth 7.8% sooner, while raw NPS is 5.8%
-lower because the average surviving node costs more. **This is a
-time-to-depth improvement, not an NPS recovery.**
+Against 2.3.0 the patch visits 16.6% fewer nodes and reaches the same depth
+11.5% sooner, while raw wall NPS is 5.7% lower. Against 1.0.0-beta it visits
+3.9% fewer nodes and reaches depth 12 in 1.4% less time; wall NPS is 2.5%
+lower and CPU NPS 3.9% lower, consistent with SEE ordering making each node
+slightly costlier. **This is a time-to-depth improvement, not an NPS
+recovery.**
 
 The previous release documented 0.75 → 0.47 M (portable) and 0.72 → 0.54 M
 (native). Those figures cannot be reproduced with this bench: the 2.3.0
-baseline itself measures 0.87–0.94 M here. The old numbers were taken with a
+baseline itself measures 0.886–1.025 M here. The old numbers were taken with a
 different bench and machine state, so they are reported only as history. On
-same-bench, idle measurements there is no 0.47 M regression; there is a small
-(5.8%) NPS cost for a 7.8% time-to-depth gain.
+same-bench, idle measurements there is no 0.47 M regression.
 
 An aggressive move-count pruning variant (590 k → 308 k nodes at depth 12) was
 built and rejected: it scored 43.3% against the Stockfish anchor, versus 51.3%
@@ -168,19 +187,30 @@ for the shipped build, and is not in the release. That result is recorded in
 
 | Match | Games | Result | Score | Elo / performance (95% CI) |
 | --- | --- | --- | --- | --- |
-| FroostRook 1 Beta vs KiwaChess 2.3.0, 100 ms/move, no book, 20 colour-swapped openings | 40 | +16 =9 −15 | 51.3% | +9 (−99 to +116) |
-| FroostRook 1 Beta vs Stockfish `UCI_Elo 2200`, 100 ms/move, book on, 20 paired openings | 40 | +19 =3 −18 | 51.3% | performance 2209 (2101–2317) |
+| 1.0.1-beta search build vs 1.0.0-beta release, 60 ms/move, no book, 120 paired openings | 240 | +103 =49 −88 | 53.1% | +22 (−22 to +66) |
+| 1.0.1-beta vs Stockfish `UCI_Elo 2200`, 100 ms/move, book on, 60 paired openings | 120 | +48 =17 −55 | 47.1% | performance 2180 (2117–2243) |
+| 1.0.0-beta vs KiwaChess 2.3.0, 100 ms/move, no book, 20 colour-swapped openings | 40 | +16 =9 −15 | 51.3% | +9 (−99 to +116) |
+| 1.0.0-beta vs Stockfish `UCI_Elo 2200`, 100 ms/move, book on, 20 paired openings | 40 | +19 =3 −18 | 51.3% | performance 2209 (2101–2317) |
 | KiwaChess 2.3.0 control vs the same Stockfish setting | 40 | +23 =1 −16 | 58.8% | performance 2261 (2151–2371) |
 
-**No strength gain is claimed.** The head-to-head result is +9 Elo with a 95%
-interval that includes zero and a large positive and negative range. The
-Stockfish control shows 2.3.0 at 2261 and 1 Beta at 2209 on this scale; the
-intervals overlap heavily. A 40-game bullet sample cannot resolve differences
-below roughly 100 Elo at 95% confidence. Earlier in development a 120-game
-head-to-head with an aggressive pruning build scored 54.6% (+32, 95% CI −30 to
-+94); that build was not shipped because it measured 43.3% against Stockfish
-and its colour split was unstable. All variants and both match types are in
-[docs/TESTING.md](docs/TESTING.md).
+**The patch's gain is plausible but not proven, and the two tests disagree.**
+The new search build scored 53.1% over 240 games, a +22 Elo point estimate
+whose 95% interval (−22 to +66) still includes zero. Against Stockfish
+`UCI_Elo 2200` the same patch scored 47.1%, performance 2180 (2117–2243),
+29 points below the previous release's 2209 point estimate but well inside its
+interval. Neither measurement establishes a strength change; the honest
+summary is "no regression proven, possible small gain, possible small loss".
+The candidate and final binaries share the same search source; at 100,000
+nodes they solve exactly the same WAC set. Colours were split 56.3% as White
+and 50.0% as Black in the duel, so some of the result is a first-move effect
+rather than a clean engine difference.
+
+The older 40-game tests (1.0.0-beta against KiwaChess 2.3.0 and Stockfish)
+could not resolve differences below roughly 100 Elo at 95% confidence. An
+earlier 120-game head-to-head with an aggressive pruning build scored 54.6%
+(+32, 95% CI −30 to +94); that build was not shipped because it measured 43.3%
+against Stockfish and its colour split was unstable. All variants and match
+types are in [docs/TESTING.md](docs/TESTING.md).
 
 The 2.3.0 binary is the previous release asset, kept byte-identical as the
 baseline. Both sides use the same movetime and the same opening pairs with
@@ -193,17 +223,21 @@ engine; reaching 3000 requires an integrated NNUE and far more testing.
 
 ### Tactics (WAC)
 
-WAC (300 positions), same binary and hardware:
+WAC (300 positions), each build run separately on the same hardware:
 
-| Budget | KiwaChess 2.3.0 | FroostRook 1 Beta |
-| --- | --- | --- |
-| 100,000 nodes/move | 223/300 | 238/300 |
-| 100 ms/move | 229/300 | 235/300 |
+| Budget | KiwaChess 2.3.0 | 1.0.0-beta | 1.0.1-beta |
+| --- | --- | --- | --- |
+| 100,000 nodes/move | 223/300 | 238/300 | 248/300 |
+| 100 ms/move (median of 3) | 236/300 | 234/300 | 241/300 |
 
 WAC rewards tactics and is not a playing-strength rating; it is reported
-because it separates search changes from noise. The +15 at a fixed node budget
-is the clearest evidence that the search changes help; the +6 at a fixed clock
-shows that the gain partly pays for the slightly lower NPS.
+because it separates search changes from noise. At a fixed node budget the
+patch solves 10 more positions than 1.0.0-beta and 25 more than 2.3.0 (248 vs
+238 vs 223). At 100 ms the patch's three runs were 239, 241 and 242 (median
+241), versus 233–236 for 1.0.0-beta and 232–236 for 2.3.0. The timed gain over
+1.0.0-beta (+7) is smaller than the fixed-node gain and sits within this
+fixture's run-to-run spread; the deterministic fixed-node result is the
+stronger evidence.
 
 ## NNUE prototype (experimental)
 
@@ -216,8 +250,9 @@ shows that the gain partly pays for the slightly lower NPS.
   into 717 train / 159 validation games to prevent leakage;
 - quantized inference reproduces the float net closely (val MSE 0.214706 vs
   0.214711) and the file is 51,556 bytes with a checksum;
-- native benchmark: 7.8 µs per full refresh, 3.7 µs per incremental evaluation
-  (128k / 269k evaluations/s, single-threaded on this laptop).
+- native benchmark: 5.2 µs per full refresh and 2.3 µs per incremental
+  evaluation in the latest run (194k / 432k evaluations/s, single-threaded on
+  this laptop; timings vary substantially with machine load).
 
 It is **not integrated into the playing engine**. On validation it beats a
 constant predictor (MSE 0.2147 vs 0.2234, sign accuracy 59.4%) but is **worse
@@ -233,7 +268,8 @@ See [docs/BUILD.md](docs/BUILD.md). Short version (Windows, MSYS2 UCRT64 GCC):
 
 ```
 cd native
-g++ -O3 -std=c++17 -static -o FroostRook.exe kiwa.cpp
+windres app.rc -O coff -o app.o
+g++ -O3 -std=c++17 -static -o FroostRook.exe kiwa.cpp app.o
 ```
 
 `native/build.bat` does the same and leaves a legacy `kiwa-native.exe` copy for
@@ -261,15 +297,18 @@ The CI workflow builds the portable binary and runs the same set on
 ## Limitations and honest gaps
 
 - **No NNUE strength.** The prototype is not connected to search.
-- **No measurable Elo gain over 2.3.0.** +9 Elo in 40 self-play games (95% CI
-  −99 to +116); the anchored results also overlap. The new work is search
-  efficiency, MultiPV and analysis, not a proven strength step.
-- **Raw NPS is about 6% lower than 2.3.0** on the depth-12 bench, while
-  time-to-depth is 8% better. The older 0.47 M figure cannot be reproduced
+- **No proven strength gain from the patch.** The 240-game duel against
+  1.0.0-beta scored 53.1% (+22 Elo, 95% CI −22 to +66), but the 120-game
+  anchored match measured 2180 (2117–2243), below the previous release's 2209
+  point estimate. The two samples disagree in sign; neither proves a change.
+  The new work is search efficiency, MultiPV and analysis. No 3000 Elo claim
+  is made.
+- **Raw NPS is about 5.7% lower than 2.3.0** on the depth-12 bench, while
+  time-to-depth is 11.5% better. The older 0.47 M figure cannot be reproduced
   with the current bench.
 - **Threads > 1 is often slower** on a 2-core laptop. The design runs
   independent searches with private TT slices; it is not a shared-TT Lazy SMP.
-- **Bullet-time evidence only.** Every match here is 100 ms/move. Strength
+- **Bullet-time evidence only.** Every match here is 60–100 ms/move. Strength
   ordering can change at longer time controls.
 - **The analyzer's labels are engine-relative**, not tablebase truth.
 - **The JS fallback is weaker** and lacks MultiPV, `stop` and true threading.
@@ -278,8 +317,9 @@ The CI workflow builds the portable binary and runs the same set on
   (`native/kiwa.cpp`, `--kiwa` in the measurement tool, `kiwa-native.exe`
   fallback). They are kept so old tooling and links do not break; all public
   branding is FroostRook.
-- **The icon is an AI-generated placeholder**, not commissioned art and not the
-  old avatar. See [assets/README.md](assets/README.md).
+- **The icon is the approved frozen-rook artwork** supplied for this project,
+  with a transparent rounded-square mask derived from the source image. See
+  [assets/README.md](assets/README.md).
 - **No source licence file is included**; the data sources and their licences
   are listed below. Ask the repository owner before redistribution.
 

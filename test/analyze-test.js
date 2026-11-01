@@ -118,6 +118,43 @@ const SPECIAL_UCIS = [
   'd7d8q',
 ];
 
+const THREEFOLD_PGN = `[Event "Synthetic threefold"]
+[Site "local"]
+[Date "2026.11.01"]
+[Round "1"]
+[White "Synthetic White"]
+[Black "Synthetic Black"]
+[Result "1/2-1/2"]
+
+1. Nf3 Nf6 2. Ng1 Ng8 3. Nf3 Nf6 4. Ng1 Ng8 1/2-1/2
+`;
+
+const FIFTY_PGN = `[Event "Synthetic fifty move"]
+[Site "local"]
+[Date "2026.11.01"]
+[Round "1"]
+[White "Synthetic White"]
+[Black "Synthetic Black"]
+[Result "1/2-1/2"]
+[SetUp "1"]
+[FEN "4k3/8/8/8/8/8/8/R3K3 w - - 99 80"]
+
+80. Ra2 Kd8 81. Ra1 Ke8 1/2-1/2
+`;
+
+const BARE_KINGS_PGN = `[Event "Synthetic dead position"]
+[Site "local"]
+[Date "2026.11.01"]
+[Round "1"]
+[White "Synthetic White"]
+[Black "Synthetic Black"]
+[Result "1/2-1/2"]
+[SetUp "1"]
+[FEN "4k3/8/8/8/8/8/8/4K3 w - - 0 1"]
+
+1/2-1/2
+`;
+
 async function testMateGame() {
   const pgn = writeTemp('mate.pgn', MATE_PGN);
   const json = path.join(TMP, 'mate.json');
@@ -173,6 +210,21 @@ async function testMateGame() {
     'best', 'excellent', 'good', 'inaccuracy', 'mistake', 'blunder', 'missed mate', 'missed win',
   ].includes(l)), [...labels].join(','));
   check('mate game: brilliant is not claimed', !labels.has('brilliant'));
+
+  const analyzedMoves = game.moves.filter((m) => m.analyzed);
+  check('mate game: default candidate-line count is 3', doc.options.multipv === 3, doc.options.multipv);
+  check('mate game: every analyzed move has candidates',
+    analyzedMoves.every((m) => Array.isArray(m.candidates) && m.candidates.length >= 1),
+    analyzedMoves.map((m) => (m.candidates || []).length).join(','));
+  check('mate game: candidate ranks are ordered from 1',
+    analyzedMoves.every((m) => m.candidates.every((c, i) => c.rank === i + 1)),
+    analyzedMoves.map((m) => m.candidates.map((c) => c.rank).join('.')).join(' '));
+  check('mate game: rank-1 candidate is the reported best move',
+    analyzedMoves.every((m) => m.candidates[0].bestUci === m.bestUci),
+    analyzedMoves.map((m) => `${m.candidates[0].bestUci}/${m.bestUci}`).join(','));
+  check('mate game: draw state is attached to every move',
+    game.moves.every((m) => m.drawBefore && m.drawAfter &&
+      typeof m.drawBefore.known === 'boolean' && typeof m.drawAfter.known === 'boolean'));
 }
 
 async function testSpecialMoves() {
@@ -291,6 +343,87 @@ async function testRealGame() {
   console.log(`INFO: real-game test took ${(result.ms / 1000).toFixed(2)} s (${analyzed.length} plies at nodes 20000)`);
 }
 
+async function testDrawRecognition() {
+  // Threefold: the final position occurred at the start and after 2...Ng8.
+  const repeatPgn = writeTemp('threefold.pgn', THREEFOLD_PGN);
+  const repeatJson = path.join(TMP, 'threefold.json');
+  const repeat = await runCli([
+    '--pgn', repeatPgn,
+    '--nodes', '10000',
+    '--multipv', '2',
+    '--max-plies', '1',
+    '--json', repeatJson,
+    '--quiet',
+  ]);
+  if (!check('draws: threefold CLI exits 0',
+    repeat.code === 0,
+    `code=${repeat.code} stderr=${repeat.stderr.trim()}`)) return;
+
+  const repeatGame = readJson(repeatJson).games[0];
+  check('draws: threefold final status',
+    repeatGame.finalStatus === 'draw-threefold', repeatGame.finalStatus);
+  check('draws: threefold is claimable and claimed by the score sheet',
+    repeatGame.finalDraw && repeatGame.finalDraw.claimable === true &&
+    repeatGame.finalDraw.claimed === true && repeatGame.finalDraw.drawn === true,
+    JSON.stringify(repeatGame.finalDraw));
+  check('draws: threefold result matches the score sheet',
+    repeatGame.resultConsistency === 'match', repeatGame.resultConsistency);
+  const repeatLast = repeatGame.moves[repeatGame.moves.length - 1];
+  check('draws: repetition is detected after the last move',
+    repeatLast.drawAfter.status === 'draw-threefold' &&
+    repeatLast.drawAfter.reasons.includes('threefold-repetition'),
+    JSON.stringify(repeatLast.drawAfter));
+  check('draws: repetition was not claimed before the last move',
+    repeatLast.drawBefore.known === false, JSON.stringify(repeatLast.drawBefore));
+  const repeatAnalyzed = repeatGame.moves.filter((m) => m.analyzed);
+  check('draws: a draw does not produce a missed win or mate label',
+    repeatAnalyzed.every((m) => m.label !== 'missed win' && m.label !== 'missed mate'),
+    repeatAnalyzed.map((m) => m.label).join(','));
+
+  // Fifty-move rule: the FEN starts at halfmove 99, so the final position is
+  // claimable at 100+ halfmoves.  The result token records the claim.
+  const fiftyPgn = writeTemp('fifty.pgn', FIFTY_PGN);
+  const fiftyJson = path.join(TMP, 'fifty.json');
+  const fifty = await runCli([
+    '--pgn', fiftyPgn,
+    '--nodes', '10000',
+    '--multipv', '1',
+    '--max-plies', '1',
+    '--json', fiftyJson,
+    '--quiet',
+  ]);
+  if (!check('draws: fifty-move CLI exits 0',
+    fifty.code === 0,
+    `code=${fifty.code} stderr=${fifty.stderr.trim()}`)) return;
+  const fiftyGame = readJson(fiftyJson).games[0];
+  check('draws: fifty-move final status',
+    fiftyGame.finalStatus === 'draw-fifty-move', fiftyGame.finalStatus);
+  check('draws: fifty-move is claimable and claimed',
+    fiftyGame.finalDraw.claimable === true && fiftyGame.finalDraw.claimed === true,
+    JSON.stringify(fiftyGame.finalDraw));
+
+  // Dead position: bare kings must be recognised without any search.
+  const deadPgn = writeTemp('dead.pgn', BARE_KINGS_PGN);
+  const deadJson = path.join(TMP, 'dead.json');
+  const dead = await runCli([
+    '--pgn', deadPgn,
+    '--nodes', '10000',
+    '--json', deadJson,
+    '--quiet',
+  ]);
+  if (!check('draws: dead-position CLI exits 0',
+    dead.code === 0,
+    `code=${dead.code} stderr=${dead.stderr.trim()}`)) return;
+  const deadGame = readJson(deadJson).games[0];
+  check('draws: bare kings are an automatic draw',
+    deadGame.finalStatus === 'draw-insufficient-material' &&
+    deadGame.finalDraw.automatic === true && deadGame.finalDraw.drawn === true,
+    JSON.stringify(deadGame.finalDraw));
+  check('draws: dead position has no moves to analyze',
+    deadGame.moves.length === 0 && deadGame.analysisRange.analyzedPlies === 0,
+    `moves=${deadGame.moves.length}`);
+}
+
 async function testMalformedPgn() {
   const pgn = writeTemp('malformed.pgn', `[Event "Malformed"]
 [Result "*"]
@@ -316,6 +449,15 @@ async function testMutuallyExclusiveBudget() {
   check('budget flags: error says mutually exclusive',
     /mutually exclusive/.test(result.stderr),
     result.stderr.trim());
+
+  const badMulti = await runCli([
+    '--pgn', pgn,
+    '--multipv', '9',
+    '--quiet',
+  ]);
+  check('multipv: out-of-range value is rejected', badMulti.code === 2, `code=${badMulti.code}`);
+  check('multipv: error states the valid range',
+    /between 1 and 8/.test(badMulti.stderr), badMulti.stderr.trim());
 }
 
 async function run() {
@@ -326,6 +468,7 @@ async function run() {
     await testMateGame();
     await testSpecialMoves();
     await testRealGame();
+    await testDrawRecognition();
     await testMalformedPgn();
     await testMutuallyExclusiveBudget();
   } finally {

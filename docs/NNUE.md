@@ -30,6 +30,7 @@ reproducible and auditable.
 | Path | Purpose |
 | --- | --- |
 | `tools/nnue/pgn.js` | Self-contained PGN reader, 0x88 board, legal move generation, SAN/`UCI` replay, feature extraction, perft. Does not depend on `engine.js`. |
+| `tools/nnue/dataset.js` | Optional reproducible dataset builder: merges the in-repo CC0 exports with a deterministic filtered subset of Lichess monthly dumps and writes `data/nnue/games.txt` plus provenance. **Not used to train the shipped net**, and its output format is not yet consumed by `train.js`. |
 | `tools/nnue/train.js` | Trains the float network, normalizes activation ranges, quantizes, writes the binary, the training log, `metrics.json` and the selftest set; runs the accumulator self-check. |
 | `native/nnue.h` / `native/nnue.cpp` | Dependency-free C++17 loader, dual-perspective accumulator, incremental add/remove, fixed-point forward pass. |
 | `native/nnue_bench.cpp` | `nnue_bench <net> <positions>`: exact selftest, incremental-vs-refresh check, timing. |
@@ -178,6 +179,40 @@ feature count, sizes, shifts, clamps, file length and checksum.
   there is no game-level leakage.
 - Targets use the **final game result only**: win = 1.0, draw = 0.5, loss =
   0.0, flipped for Black to move. No engine or material labels are used.
+- This 876-game set was the only data used for the shipped net. A larger-data
+  pipeline exists (`tools/nnue/dataset.js`, below) but was **not** run for the
+  shipped binary and is **not** wired into `train.js`.
+
+### Optional dump-based dataset builder (not used for the shipped net)
+
+`tools/nnue/dataset.js` is a starting point for a larger corpus:
+
+```
+node tools/nnue/dataset.js --help
+node tools/nnue/dataset.js --months 2013-01,2013-06 --max-dump-games 6000 \
+  --min-elo 1600 --min-base-seconds 180 --min-plies 40
+```
+
+- It downloads Lichess standard monthly dumps (CC0) to an out-of-repo cache
+  (default `<tmp>/frnn1-dump-cache`), so the repository does not grow by
+  gigabytes. `--no-download` uses an existing cache; `--stats-only` prints
+  counts without writing.
+- Games are filtered by header: Standard only, no `SetUp`/`FEN`, decisive or
+  drawn result, `Termination=Normal`, base time control ≥ 180 s, both ratings
+  ≥ 1600, and at least 40 plies. The filters drop bullet noise and
+  time-forfeit losses, the two largest label-noise sources for a
+  result-trained net.
+- Selection is deterministic: games are ranked by
+  `FNV-1a32("frnn1-games " + GameId)` and the lowest `--max-dump-games` are
+  kept, then written sorted by id. Output is `data/nnue/games.txt` (one game
+  per line, tab-separated header plus UCI moves) and
+  `data/nnue/dataset.meta.json` with counts, filters, split sizes and a
+  SHA-256 of the file.
+- The split rule is game-level (70/15/15 by `FNV-1a32("frnn1-split " + id)`),
+  so no game can leak across train/validation/test.
+- **Status:** tool only. It has not been executed for a published run, its
+  `games.txt` format is not read by `train.js`, and no retrained network is
+  shipped. The numbers in this document all come from the 876-game set.
 
 ## Targets and loss
 
@@ -286,23 +321,25 @@ Run:
 ./native/nnue_bench.exe data/nnue/frnn1.bin data/nnue/selftest.txt
 ```
 
-Result of the shipped run:
+Result of the latest run:
 
 - **192/192 selftest positions PASS** (exact fixed-point match).
 - Incremental vs full refresh: **192 checks, 0 mismatches**.
-- Timing, scalar `-O3` build, one core, median of three repetitions:
+- Timing, scalar `-O3` build, one core (single pass per path):
 
 | Path | positions/sec | ns/eval |
 | --- | ---: | ---: |
-| Full refresh (reset + evaluate) | 109,292 | 9,150 |
-| Incremental (move delta + evaluate) | 248,399 | 4,026 |
+| Full refresh (reset + evaluate) | 193,859 | 5,158 |
+| Incremental (move delta + evaluate) | 431,594 | 2,317 |
 
-Run-to-run variation on the same machine was large: roughly 70k–128k
-positions/sec for full refresh and 148k–283k for incremental, depending on CPU
-frequency and machine load. The incremental path is roughly 2–3× faster
-because it touches only the changed squares instead of rescanning the board.
-Its timing includes one full refresh per 192-position pass (amortized over the
-pass). There is no SIMD; these are plain scalar loops.
+Run-to-run variation on the same machine is large: observed results range from
+roughly 70k to 194k positions/sec for full refresh and 148k to 467k for
+incremental, depending on CPU frequency and machine load. Earlier documentation
+cited medians of three runs (109k full / 248k incremental); those are within the
+observed range but not a stable benchmark. The incremental path is roughly
+1.8–2.3× faster because it touches only the changed squares instead of
+rescanning the board. Its timing includes one full refresh per 192-position
+pass (amortized over the pass). There is no SIMD; these are plain scalar loops.
 
 ## Honest assessment
 
@@ -323,15 +360,27 @@ pass). There is no SIMD; these are plain scalar loops.
   handcrafted evaluation**, and the engine does not use it. Integrating it
   would require a much larger, higher-quality dataset (and likely a larger
   network and better training schedule) before it could compete.
-- Possible next steps (not done here): more games, WDL/depth-aware labels,
-  best-checkpoint selection, larger H1/H2, king buckets, SIMD, and training
-  with a small opening-book filter. None of these are claimed as implemented.
+- **No retraining on larger data was completed.** `tools/nnue/dataset.js` was
+  added so a bigger CC0 corpus can be assembled reproducibly, but it was not
+  run to produce a training set, `train.js` was not changed to consume it, and
+  no new network is shipped. The shipped `frnn1.bin` is still the 876-game
+  model described above, and the handcrafted evaluation remains the default
+  and the only evaluator used in play.
+- Possible next steps (not done here): run `dataset.js` on enough months to
+  produce a materially larger corpus, teach `train.js` to read
+  `games.txt`, WDL/depth-aware labels, best-checkpoint selection, larger
+  H1/H2, king buckets, SIMD, and training with a small opening-book filter.
+  None of these are claimed as implemented.
 
 ## Reproducing
 
 ```
+# shipped net (876 in-repo games)
 node tools/nnue/train.js --epochs 24 --batch 64 --lr 0.0002 --l2 0 \
   --w1mult 5 --w2mult 0.3 --w3mult 0.3
+
+# optional larger corpus; NOT consumed by train.js yet
+node tools/nnue/dataset.js --months 2013-01,2013-06 --max-dump-games 6000
 
 export PATH="/c/msys64/ucrt64/bin:$PATH"
 /c/msys64/ucrt64/bin/g++.exe -O3 -std=c++17 -static \

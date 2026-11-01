@@ -1,11 +1,19 @@
-# Icon
+# FroostRook 1 Beta icon
 
-`froostrook.png` is an **AI-generated placeholder** made for this project with an
-image model. No finished icon or mascot art was supplied in the repository or
-in the files handed over for the FroostRook release, and no previous mascot was
-reused. It shows an illustrated frozen rook on a frozen chessboard in icy silver
-and pale blue, as specified, and is used as the repository/release image.
+The official mascot is the frozen-rook artwork supplied by the project owner
+(`engine-icon-approved.jpg`, 1024x1024). It is used as supplied; no other
+mascot or placeholder is substituted.
 
-Replace it with final commissioned art when available; keep the same filename or
-update the README reference. `kiwa.png` is the old pre-rename avatar and is not
-used by the FroostRook documentation or release.
+Derived assets:
+
+- `engine-icon.png` — 1024x1024 RGBA, rounded-square alpha mask. Outside the
+  silhouette alpha is 0; the four frozen background quadrants and the rook are
+  unchanged. Corners and the centre were verified after generation.
+- `engine-icon.ico` — Windows icon with 16, 32, 48, 64, 96, 128 and 256 px
+  images. It is embedded in `FroostRook.exe` through `native/app.rc`.
+- `social-preview.png` — 1280x640 repository social card built from the same
+  approved icon.
+
+The source JPEG has no alpha channel. The transparency in the PNG/ICO is a
+rounded-rectangle mask derived from the artwork; it is not a checkerboard
+pattern and does not alter the illustration inside the silhouette.

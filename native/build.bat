@@ -5,7 +5,12 @@ setlocal
 set PATH=C:\msys64\ucrt64\bin;%PATH%
 cd /d "%~dp0"
 
-g++ -O3 -march=native -std=c++17 -static -o FroostRook.exe kiwa.cpp
+windres app.rc -O coff -o app.o
+if errorlevel 1 (
+  echo Resource compilation failed.
+  exit /b 1
+)
+g++ -O3 -march=native -std=c++17 -static -o FroostRook.exe kiwa.cpp app.o
 if errorlevel 1 (
   echo Build failed.
   exit /b 1

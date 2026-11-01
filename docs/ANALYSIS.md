@@ -1,15 +1,15 @@
 # PGN analysis CLI
 
 `analyze.js` analyzes PGN games with the native FroostRook UCI engine and reports
-per-move centipawn loss, a fixed classification, and per-player summaries. It
-uses only Node built-ins; `engine.js` is reused for legal move generation and
-for replaying moves with correct castling rights, en passant, halfmove clock,
-fullmove number, and repetition history.
+per-move centipawn loss, a fixed classification, candidate lines, draw-rule
+status, and per-player summaries. It uses only Node built-ins; `engine.js` is
+reused for legal move generation and for replaying moves with correct castling
+rights, en passant, halfmove clock, fullmove number, and repetition history.
 
 ## Usage
 
 ```
-node analyze.js --pgn path.pgn [--game N] [--depth 12] [--nodes 100000] [--engine path] [--json out.json] [--quiet]
+node analyze.js --pgn path.pgn [--game N] [--depth 12] [--nodes 100000] [--multipv 3] [--engine path] [--json out.json] [--quiet]
 ```
 
 Extra bounding options:
@@ -24,6 +24,7 @@ node analyze.js --pgn path.pgn --start-ply N --max-plies N
 | `--game N` | Analyze one game, 1-based, in file order. | all games |
 | `--depth N` | `go depth N` search budget. | `12` |
 | `--nodes N` | `go nodes N` search budget. Mutually exclusive with `--depth`. | none |
+| `--multipv N` | Request `N` candidate lines per position, 1-8. Values outside that range are usage errors. | `3` |
 | `--engine PATH` | UCI engine executable. Overrides `FROOSTROOK_ENGINE`. | `native/FroostRook.exe` |
 | `--json PATH` | Write the structured JSON document to `PATH`. The JSON is not printed. | none |
 | `--quiet` | Suppress the human-readable stdout report. | off |
@@ -77,6 +78,37 @@ halfmove clock, fullmove number, and position history are maintained. Analysis
 stops if a position before a move is checkmate or stalemate; any remaining
 moves in the file are not processed.
 
+## Draw rules and final status
+
+Repetition is tracked with FIDE position identity: same pieces on the same
+squares, same side to move, same castling rights, and the same en passant
+target only when an en passant capture is actually legal. The halfmove clock is
+taken from the replayed position, so `[FEN ...]` games with a non-zero clock
+are handled correctly.
+
+Two kinds of draw rules are distinguished:
+
+- **Automatic**: stalemate, dead position (insufficient mating material under
+  FIDE 5.2.2, including same-coloured bishops), fivefold repetition, and the
+  seventy-five-move rule. These end the game without a claim.
+- **Claimable**: threefold repetition and the fifty-move rule. A claimable draw
+  is marked as `drawn` only when the PGN result is `1/2-1/2`; without that
+  token play is treated as having continued.
+
+`finalStatus` is one of `checkmate`, `stalemate`, `draw-insufficient-material`,
+`draw-fivefold`, `draw-seventy-five-move`, `draw-threefold`, `draw-fifty-move`,
+the decisive result (`1-0`/`0-1`), or `unfinished`. `finalDraw` carries the
+machine-readable reasons, flags, and the engine-shortcut marker described
+below. `resultConsistency` compares the score sheet with the replayed position:
+`match`, `mismatch`, or `unknown` when the position does not force a result.
+
+When the root position is already a dead position, fivefold repetition,
+seventy-five-move count, claimable threefold, or claimable fifty-move count,
+the native engine returns an immediate `score cp 0` instead of searching. Such
+a root is flagged with `engineShortcut: true` (and on the move's `drawBefore` /
+`drawAfter`), and its score is not treated as evidence about the position:
+`aclSample` is false for those moves.
+
 ## Engine protocol
 
 One engine process is spawned per run and reused for every position. At startup
@@ -97,11 +129,18 @@ budget:
 2. the position after the played move, giving `S_after` from the opponent's
    point of view. The mover's value is `-S_after`.
 
-`info` lines are parsed tolerantly. When MultiPV is present, lines with
-`multipv 1` (or no `multipv`) are preferred; the deepest such line wins, and the
-later line wins on a depth tie. The engine's PV first move is the "best" move;
-if a PV is absent, `bestmove` is used as a fallback. A `bestmove 0000` in a
-non-terminal position is treated as an engine failure.
+`info` lines are parsed tolerantly. For each MultiPV rank the deepest line wins
+and the later line wins on a depth tie. Rank 1 is the reported best line; its PV
+first move is the "best" move, and if the PV is absent, `bestmove` is used as a
+fallback. A `bestmove 0000` in a non-terminal position is treated as an engine
+failure.
+
+The CLI sets `MultiPV` to `--multipv` (default 3) and collects one line per
+rank for the position before each move. These are real engine lines at the same
+budget, not post-hoc guesses. Ranks beyond those the engine could resolve in the
+budget are simply absent, so `candidates.length` can be smaller than the
+requested count. `--multipv 1` restores single-line analysis and is the fastest
+mode.
 
 ## Scores, mate handling, and point of view
 
@@ -169,17 +208,29 @@ aggregate metrics, so there is no opaque or invented conversion.
 ## Output
 
 Without `--quiet`, stdout contains a human-readable report: game tags, start
-position, analysis range, final status, a per-move table (ply, move number,
-SAN, played UCI, engine best UCI, eval before, eval after, loss, label), and the
-per-player summary. With `--json PATH`, the same data is written as a structured
-document with:
+position, analysis range, final status, any draw rule that applies, the
+score-sheet consistency check, a per-move table (ply, move number, SAN, played
+UCI, engine best UCI, eval before, eval after, loss, label), and the per-player
+summary. When more than one candidate line was returned, each analyzed move is
+followed by a compact `lines:` line with the rank, score, and first six PV
+moves.
 
-- top-level engine, budget, and option metadata;
-- `games[]` with `tags`, `startFen`, `result`, `finalStatus`, `stoppedEarly`,
-  `analysisRange`, all `moves`, and `summary`;
-- each move object contains `san`, `uci`, `analyzed`, and (when analyzed)
-  `bestUci`, `evalBefore`, `evalAfter`, `moverCpBefore`, `moverCpAfter`, `loss`,
-  `label`, `aclSample`, `terminalBefore`, and `terminalAfter`.
+With `--json PATH`, the same data is written as a structured document with:
+
+- top-level engine, budget, and option metadata (including `multipv`);
+- `games[]` with `tags`, `startFen`, `result`, `finalStatus`, `finalDraw`,
+  `resultConsistency`, `stoppedEarly`, `analysisRange`, all `moves`, and
+  `summary`;
+- each move object contains `san`, `uci`, `analyzed`, `drawBefore`, `drawAfter`,
+  and (when analyzed) `bestUci`, `candidates`, `evalBefore`, `evalAfter`,
+  `moverCpBefore`, `moverCpAfter`, `loss`, `label`, `aclSample`,
+  `terminalBefore`, and `terminalAfter`.
+
+A `drawBefore`/`drawAfter` object contains `status`, `reasons`, `known`,
+`automatic`, `claimable`, `claimed`, `drawn`, `engineShortcut`, and `source`. A
+candidate object contains `rank`, `cp`, `mateIn`, `terminal`, `pv`, `bestUci`,
+`depth`, and `nodes`, and is oriented from the side to move just like
+`evalBefore`.
 
 Unanalyzed moves (outside `--start-ply`/`--max-plies`) are still present in
 JSON with their parsed SAN/UCI and `"analyzed": false`, but without evals or a
@@ -193,9 +244,11 @@ node test/analyze-test.js
 
 The suite covers the synthetic `1. f3 e5 2. g4 Qh4#` mate, castling in both
 directions, en passant, promotion, comments/variations, `0-0-0`, the alternative
-SAN promotion forms, a real PGN from `test/human-games/`, a malformed PGN, and
-the mutually exclusive budget flags. It prints PASS/FAIL lines, prints a
-summary, and exits non-zero on any failure.
+SAN promotion forms, a real PGN from `test/human-games/`, threefold repetition
+(claimed), the fifty-move rule from a setup FEN, an automatic dead-position
+draw with no moves, label whitelisting, MultiPV candidate ordering, malformed
+PGNs, the mutually exclusive budget flags, and the `--multipv` range check. It
+prints PASS/FAIL lines, prints a summary, and exits non-zero on any failure.
 
 ## Performance and limitations
 
@@ -204,26 +257,28 @@ Measured with the FroostRook 1 Beta native core on this Windows 10 machine:
 - depth-12 start-position search: 0.668–0.694 s, 590,750 nodes (seven-run
   bench, idle machine; see [TESTING.md](TESTING.md));
 - the regression suite's real-game case (10 plies, 20 searches at
-  `nodes 20000`) completes in about 2.5 s including process startup.
+  `nodes 20000`, default MultiPV 3) completes in about 2.2 s including process
+  startup.
 
 The older 2.3.0 figures (about 2 s per depth-12 search, 170 s for a 40-move
 game) are history and are not current measurements. No full 40-move game at
 depth 12 was timed for this release; analysis cost scales with the number of
-positions searched (two per ply).
+positions searched (two per ply) and with the MultiPV count.
 
 Because two searches are performed per analyzed move, a full game at depth 12
-takes time proportional to twice the number of plies. Use `--max-plies`,
-`--start-ply`, or `--nodes` to bound work.
+takes time proportional to twice the number of plies. MultiPV adds further cost
+because the engine must resolve several root moves. Use `--max-plies`,
+`--start-ply`, `--nodes`, or `--multipv 1` to bound work.
 
 Limitations:
 
-- only checkmate/stalemate stop analysis; draws by fifty-move, threefold
-  repetition, or insufficient material are reported in `finalStatus` but are
-  still searched (they can still receive a `cp` label);
+- only checkmate and stalemate stop the replay loop; a claimable draw is
+  reported and searched, and its engine score is flagged as a shortcut (the
+  native engine returns 0 for such roots), so it cannot support an ACL sample;
 - variations and comments are ignored, not analyzed;
-- only the engine's best line is evaluated; the tool does not search every
-  alternative move, so a non-PV move's loss is relative to the *engine's* best
-  choice at the same budget, not a full multi-move refutation;
+- the played move's loss is measured against the engine's best line at the same
+  budget. Other candidate lines are reported for context, but the tool does not
+  search every legal alternative or claim a full multi-move refutation;
 - `brilliant` is not implemented, and there is no accuracy percentage;
 - null moves (`--`/`Z0`) are rejected;
 - Chess960 is not supported;

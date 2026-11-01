@@ -7,6 +7,7 @@ native/kiwa-native.exe
 native/KiwaChess.exe
 native/FroostRook.exe
 native/nnue_bench.exe
+native/app.o
 
 # Local build/measure artifacts (never committed)
 .build/

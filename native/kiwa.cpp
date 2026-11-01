@@ -1534,8 +1534,9 @@ static int moveScore(uint32_t mv, uint32_t ttMove, int ply, uint32_t prevMv) {
 
   if (flags & F_CAP) {
     const int victim = board[to] ? typeOf(board[to]) : PAWN;
-    const int attacker = typeOf(board[from]);
-    return (1 << 22) + VAL_MG[victim] * 16 - VAL_MG[attacker];
+    const int seev = see(mv);
+    if (seev >= 0) return (1 << 22) + seev * 16;
+    return (1 << 19) + seev;
   }
 
   if (mv == (uint32_t)killers[ply * 2]) return 1 << 21;
@@ -1667,12 +1668,8 @@ static int negamax(int depth, int alpha, int beta, int ply, bool canNull) {
   const bool inCheck = attacked(kingSq[side], side ^ 1);
   if (depth <= 0) return quiesce(alpha, beta, ply, inCheck);
 
-  // Internal iterative reduction: a deep node without a TT move has a weak
-  // first move, so one shallower pass buys a better order for the next one.
-#ifndef FR_NO_IIR
-  if (depth >= 4 && !ttMove && !inCheck) depth--;
-#endif
-
+  // IIR deliberately absent: A/B tests showed it lost tactics without a
+  // node-count win, so the reduced re-search is not worth it.
   const int staticEval = inCheck ? -INF : evaluate();
 
   if (!inCheck && depth <= 2 && staticEval - 120 * depth >= beta) return staticEval;
