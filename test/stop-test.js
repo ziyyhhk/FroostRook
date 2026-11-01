@@ -3,7 +3,7 @@
 const { spawn } = require('child_process');
 const path = require('path');
 
-const EXE = path.join(__dirname, '..', 'native', 'kiwa-native.exe');
+const EXE = require('../native-exe');
 
 function run({ threads, goCmd, stopAfter, label }) {
   return new Promise((resolve) => {

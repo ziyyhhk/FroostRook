@@ -8,7 +8,7 @@
 const { spawn } = require('child_process');
 const path = require('path');
 
-const EXE = process.env.KIWA_NATIVE || path.join(__dirname, '..', 'native', 'kiwa-native.exe');
+const EXE = require('../native-exe');
 
 const CASES = [
   ['startpos', 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', [20, 400, 8902, 197281, 4865609]],

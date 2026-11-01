@@ -25,23 +25,22 @@ jobs:
         shell: msys2 {0}
         run: |
           cd native
-          g++ -O3 -std=c++17 -static -o kiwa-native.exe kiwa.cpp
-          cp kiwa-native.exe KiwaChess.exe
-          ls -l kiwa-native.exe KiwaChess.exe
+          g++ -O3 -std=c++17 -static -o FroostRook.exe kiwa.cpp
+          ls -l FroostRook.exe
 
       - name: Perft smoke test
         shell: msys2 {0}
         run: |
-          out=$(native/KiwaChess.exe perft 4)
+          out=$(native/FroostRook.exe perft 4)
           echo "$out"
           echo "$out" | grep -q 197281
 
       - name: Book / rules smoke test
         shell: msys2 {0}
         run: |
-          out=$(printf 'position startpos\ngo wtime 60000 btime 60000\nquit\n' | native/KiwaChess.exe)
+          out=$(printf 'position startpos\ngo wtime 60000 btime 60000\nquit\n' | native/FroostRook.exe)
           echo "$out" | grep -q '^bestmove '
-          out2=$(printf 'position fen 7k/5Q2/6K1/8/8/8/8/8 b - - 0 1\ngo depth 2\nquit\n' | native/KiwaChess.exe)
+          out2=$(printf 'position fen 7k/5Q2/6K1/8/8/8/8/8 b - - 0 1\ngo depth 2\nquit\n' | native/FroostRook.exe)
           echo "$out2" | grep -q 'bestmove 0000'
 
       - name: Node regression tests
@@ -56,32 +55,35 @@ jobs:
           node test/stop-test.js
           node test/openings-native.js 20 6
           node test/book-fallback.js 2 6
+          node test/analyze-test.js
 
       - name: Zip the testable build (binaries plus the Node front-end)
         shell: bash
         run: |
           version=$(node -p "require('./package.json').version")
-          dir="dist/KiwaChess-$version"
-          mkdir -p "$dir/native" "$dir/data" "$dir/test"
-          cp native/KiwaChess.exe native/kiwa-native.exe "$dir/"
-          cp kiwa.bat README.md engine.js uci.js native.js book.js play.js package.json predict-model.js "$dir/"
+          dir="dist/FroostRook-$version"
+          mkdir -p "$dir/native" "$dir/data" "$dir/test" "$dir/docs"
+          cp native/FroostRook.exe "$dir/"
+          cp FroostRook.bat README.md engine.js uci.js native.js native-exe.js book.js play.js package.json predict-model.js analyze.js "$dir/"
           cp native/book_data.h native/kiwa.cpp native/build.bat "$dir/native/"
           cp data/*.json "$dir/data/"
+          cp docs/*.md "$dir/docs/"
           cp wacnew.epd "$dir/"
           cp -r book-data "$dir/"
           cp test/*.js test/*.md "$dir/test/"
           cp -r test/data "$dir/test/"
           cp -r test/human-games "$dir/test/"
-          ( cd dist && powershell -Command "Compress-Archive -Path 'KiwaChess-$version' -DestinationPath 'KiwaChess-$version-full.zip' -Force" )
+          ( cd dist && powershell -Command "Compress-Archive -Path 'FroostRook-$version' -DestinationPath 'FroostRook-$version-full.zip' -Force" )
+          git archive --format=zip --output="dist/FroostRook-$version-source.zip" HEAD
           ls -l dist/
 
       - uses: actions/upload-artifact@v4
         with:
-          name: KiwaChess-windows-x64
+          name: FroostRook-windows-x64
           path: |
-            native/KiwaChess.exe
-            native/kiwa-native.exe
+            native/FroostRook.exe
             dist/*-full.zip
+            dist/*-source.zip
 
       - name: Attach binary to the release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -90,6 +92,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
-            gh release create "$GITHUB_REF_NAME" --title "KiwaChess ${GITHUB_REF_NAME#v}" \
-              --notes "Portable Windows x64 build (generic x86-64, no CPU-specific instructions). Import KiwaChess.exe directly into any UCI GUI; kiwa-native.exe is the same binary under the name the Node front-end expects. The -full.zip is the same engine plus the Node front-end, opening book, learned prediction model and the test suite, so the personalities, predictor and benchmarks can be run locally."
-          gh release upload "$GITHUB_REF_NAME" native/KiwaChess.exe native/kiwa-native.exe dist/*-full.zip --clobber
+            gh release create "$GITHUB_REF_NAME" --title "FroostRook 1 Beta" \
+              --notes "Portable Windows x64 build (generic x86-64, no CPU-specific instructions). Import FroostRook.exe directly into any UCI GUI. FroostRook-1.0.0-beta-full.zip adds the Node front-end, opening book, learned prediction model, PGN analysis tool and the test suite. Source code archives are attached automatically and as a source ZIP. See the README and docs/ANALYSIS.md for UCI options, analysis usage and measured test results."
+          gh release upload "$GITHUB_REF_NAME" native/FroostRook.exe dist/*-full.zip dist/*-source.zip --clobber

@@ -62,7 +62,7 @@ const MS = Math.max(10, +(arg('ms', 100)));
 const PAIRS = Math.max(1, Math.min(120, +(arg('pairs', 5))));
 const SF_EXE = arg('stockfish', process.env.STOCKFISH || 'stockfish');
 const PGN_FILE = arg('pgn', null);
-const KIWA_EXE = arg('kiwa', process.env.KIWA_NATIVE || path.join(__dirname, '..', 'native', 'kiwa-native.exe'));
+const KIWA_EXE = arg('kiwa', require('../native-exe'));
 // --opp makes this a duel between two binaries instead of an anchored match.
 const OPP_EXE = arg('opp', process.env.OPP_NATIVE || null);
 const DUEL = !!OPP_EXE;

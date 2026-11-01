@@ -24,6 +24,10 @@
 #include <algorithm>
 #include <random>
 #include <unordered_map>
+#include <ctime>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include "book_data.h"
 
 using namespace std;
@@ -211,6 +215,10 @@ static thread_local int kingSq[2];
 static thread_local int side = WHITE;
 static thread_local int castling = 0;
 static thread_local int epSq = -1;
+// Whether ZE[epSq] is currently XORed into the key. Computing this costs a
+// legal-capture check (with board edits) and only changes when a pawn double
+// push happens, so it is cached instead of re-derived on every make/unmake.
+static thread_local bool epKeyed = false;
 static thread_local int halfmove = 0;
 static thread_local int fullmove = 1;
 
@@ -220,6 +228,7 @@ static thread_local int mg = 0, eg = 0, phase = 0;
 
 static thread_local int stCastling[MAX_HIST];
 static thread_local int stEp[MAX_HIST];
+static thread_local int8_t stEpKeyed[MAX_HIST];
 static thread_local int stHalf[MAX_HIST];
 static thread_local u64 stKey[MAX_HIST];
 static thread_local int stCap[MAX_HIST];
@@ -345,7 +354,8 @@ static void setFen(const string& fen) {
   key ^= ZC[castling];
   // An ep square only distinguishes positions when the capture is legal
   // (FIDE 9.2.2). FENs often carry an ep square after every double push.
-  if (epSq >= 0 && epCapturePossible(side)) key ^= ZE[epSq & 7];
+  epKeyed = epSq >= 0 && epCapturePossible(side);
+  if (epKeyed) key ^= ZE[epSq & 7];
   if (side == BLACK) key ^= ZS;
 
   posKeys[0] = key;
@@ -728,12 +738,13 @@ static inline void makeMove(uint32_t mv) {
   const int st = stateTop++;
   stCastling[st] = castling;
   stEp[st] = epSq;
+  stEpKeyed[st] = epKeyed ? 1 : 0;
   stHalf[st] = halfmove;
   stKey[st] = key;
   stCap[st] = 0;
 
   key ^= ZC[castling];
-  if (epSq >= 0 && epCapturePossible(side)) key ^= ZE[epSq & 7];
+  if (epKeyed) key ^= ZE[epSq & 7];
 
   const int us = side, them = us ^ 1;
   const int moving = board[from];
@@ -784,7 +795,8 @@ static inline void makeMove(uint32_t mv) {
   epSq = (flags & F_DOUBLE) ? (from + (us == WHITE ? 16 : -16)) : -1;
 
   key ^= ZC[castling];
-  if (epSq >= 0 && epCapturePossible(them)) key ^= ZE[epSq & 7];
+  epKeyed = epSq >= 0 && epCapturePossible(them);
+  if (epKeyed) key ^= ZE[epSq & 7];
   key ^= ZS;
 
   if (us == BLACK) fullmove++;
@@ -828,6 +840,7 @@ static inline void unmakeMove(uint32_t mv) {
 
   castling = stCastling[st];
   epSq = stEp[st];
+  epKeyed = stEpKeyed[st] != 0;
   halfmove = stHalf[st];
   key = stKey[st];
 }
@@ -836,12 +849,14 @@ static inline void makeNull() {
   const int st = stateTop++;
   stCastling[st] = castling;
   stEp[st] = epSq;
+  stEpKeyed[st] = epKeyed ? 1 : 0;
   stHalf[st] = halfmove;
   stKey[st] = key;
   stCap[st] = 0;
 
-  if (epSq >= 0 && epCapturePossible(side)) key ^= ZE[epSq & 7];
+  if (epKeyed) key ^= ZE[epSq & 7];
   epSq = -1;
+  epKeyed = false;
   halfmove++;
   key ^= ZS;
   side ^= 1;
@@ -852,6 +867,7 @@ static inline void unmakeNull() {
   side ^= 1;
   castling = stCastling[st];
   epSq = stEp[st];
+  epKeyed = stEpKeyed[st] != 0;
   halfmove = stHalf[st];
   key = stKey[st];
 }
@@ -878,9 +894,12 @@ static const int MOB_EG[7] = { 0, 0, 3, 2, 3, 1, 0 };
 static const int OUTPOST_N_MG = 25, OUTPOST_N_EG = 15;
 static const int OUTPOST_B_MG = 15, OUTPOST_B_EG = 10;
 
-// Pawn attack maps, rebuilt on every full-extras miss.
+// Pawn attack maps. They depend only on the pawn placement, so they are
+// rebuilt only when the pawn key changes, not on every full-extras miss.
 static thread_local int8_t wPawnAtk[128];
 static thread_local int8_t bPawnAtk[128];
+static thread_local u64 pawnAtkKey = 0;
+static thread_local bool pawnAtkValid = false;
 
 // Pawn-structure cache keyed by the pawn-only Zobrist key.
 static const int PH_SIZE = 1 << 13;
@@ -891,13 +910,19 @@ static thread_local int phScoreEg[PH_SIZE];
 static thread_local int phWB[PH_SIZE];
 static thread_local int phBB[PH_SIZE];
 
-// Whole-extras cache keyed by the position hash.
-static const int EX_SIZE = 1 << 15;
+// Whole-extras cache keyed by the position hash. Two ways per bucket: a
+// depth-12 search visits more distinct positions than a 32K direct-mapped
+// table can hold, and every miss recomputes all positional terms.
+#ifndef EX_BITS
+#define EX_BITS 15
+#endif
+static const int EX_SIZE = 1 << EX_BITS;
 static const int EX_MASK = EX_SIZE - 1;
 static thread_local u64 exKey[EX_SIZE];
 static thread_local int exScoreMg[EX_SIZE];
 static thread_local int exScoreEg[EX_SIZE];
 static thread_local int extraMg, extraEg;
+static thread_local u64 exCalls = 0, exMisses = 0;
 
 static inline int chebDist(int a, int b) {
   const int dr = abs((a >> 4) - (b >> 4));
@@ -969,7 +994,11 @@ static void extrasRaw() {
   const int wpc = pieceCount[wpIdx], bpc = pieceCount[bpIdx];
   int xmg = 0, xeg = 0;
 
-  fillPawnAttacks();
+  if (!pawnAtkValid || pawnAtkKey != pawnKey) {
+    fillPawnAttacks();
+    pawnAtkKey = pawnKey;
+    pawnAtkValid = true;
+  }
 
   if (wpc == 0 && bpc == 0) {
     for (int f = 0; f < 8; f++) { wpFiles[f] = 0; bpFiles[f] = 0; }
@@ -1215,13 +1244,23 @@ static void extrasRaw() {
 }
 
 static void extras() {
-  const int idx = (int)(key & EX_MASK);
-  if (exKey[idx] == key) {
-    extraMg = exScoreMg[idx]; extraEg = exScoreEg[idx];
+  exCalls++;
+  const size_t base = (size_t)(key & EX_MASK) & ~(size_t)1;
+  if (exKey[base] == key) {
+    extraMg = exScoreMg[base]; extraEg = exScoreEg[base];
     return;
   }
+  if (exKey[base + 1] == key) {
+    extraMg = exScoreMg[base + 1]; extraEg = exScoreEg[base + 1];
+    return;
+  }
+  exMisses++;
   extrasRaw();
-  exKey[idx] = key; exScoreMg[idx] = extraMg; exScoreEg[idx] = extraEg;
+  size_t slot;
+  if (exKey[base] == 0) slot = base;
+  else if (exKey[base + 1] == 0) slot = base + 1;
+  else slot = base + (size_t)((key >> 17) & 1);
+  exKey[slot] = key; exScoreMg[slot] = extraMg; exScoreEg[slot] = extraEg;
 }
 
 // Positional terms (pawn structure, outposts, bishop quality, rook activity,
@@ -1251,6 +1290,7 @@ static int evaluate() {
 static size_t ttSize = 0;
 static size_t ttMask = 0;
 static int hashMB = 64;
+static int multiPvOption = 1;
 // Each search thread gets a private slice of the shared table, so no locks
 // and no data races. -1 means "use the whole table".
 static thread_local size_t ttOffset = 0;
@@ -1397,6 +1437,21 @@ static int LMR[64][MAX_MOVES];
 static i64 nowMs() {
   using namespace std::chrono;
   return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
+
+// Process CPU time (user+kernel), used by `bench` because wall time on a
+// shared machine is dominated by scheduling noise, not engine speed.
+static i64 cpuMs() {
+#ifdef _WIN32
+  FILETIME created, exited, kernel, user;
+  if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) return 0;
+  ULARGE_INTEGER k, u;
+  k.LowPart = kernel.dwLowDateTime; k.HighPart = kernel.dwHighDateTime;
+  u.LowPart = user.dwLowDateTime; u.HighPart = user.dwHighDateTime;
+  return (i64)((k.QuadPart + u.QuadPart) / 10000);
+#else
+  return (i64)((double)clock() * 1000.0 / (double)CLOCKS_PER_SEC);
+#endif
 }
 
 static inline bool timeUp() {
@@ -1612,6 +1667,12 @@ static int negamax(int depth, int alpha, int beta, int ply, bool canNull) {
   const bool inCheck = attacked(kingSq[side], side ^ 1);
   if (depth <= 0) return quiesce(alpha, beta, ply, inCheck);
 
+  // Internal iterative reduction: a deep node without a TT move has a weak
+  // first move, so one shallower pass buys a better order for the next one.
+#ifndef FR_NO_IIR
+  if (depth >= 4 && !ttMove && !inCheck) depth--;
+#endif
+
   const int staticEval = inCheck ? -INF : evaluate();
 
   if (!inCheck && depth <= 2 && staticEval - 120 * depth >= beta) return staticEval;
@@ -1648,11 +1709,27 @@ static int negamax(int depth, int alpha, int beta, int ply, bool canNull) {
     if (attacked(kingSq[side ^ 1], side)) { unmakeMove(mv); continue; }
     legal++;
     moveStack[ply] = mv;
+
+    const bool givesCheck = attacked(kingSq[side], side ^ 1);
+    // Shallow pruning of quiet moves. Checks, captures and promotions are
+    // never pruned, and the first legal move is always searched, so a forced
+    // reply or a mate score cannot be lost; only the recursive call is saved.
+#ifndef FR_NO_PRUNING
+    if (!inCheck && legal > 1 && !(flags & F_CAP) && !promo && !givesCheck) {
+      if (depth <= 3 && staticEval != -INF && staticEval + 100 + 100 * depth <= alpha) {
+        unmakeMove(mv);
+        continue;
+      }
+      if (depth <= 4 && legal > 6 + depth * depth) {
+        unmakeMove(mv);
+        continue;
+      }
+    }
+#endif
     if (!(flags & F_CAP) && !promo && nQuiet < 64) {
       quietHist[nQuiet++] = us * 16384 + (mv & 127) * 128 + ((mv >> 7) & 127);
     }
 
-    const bool givesCheck = attacked(kingSq[side], side ^ 1);
     // Check extension: forced replies are cheap to resolve, so keep the depth.
     int newDepth = depth - 1;
     if (givesCheck && depth >= 2 && depth <= 6 && ply < 40) newDepth++;
@@ -1789,6 +1866,56 @@ static RootResult rootSearch(int depth, int alpha, int beta) {
   return res;
 }
 
+struct RootLine {
+  uint32_t move = 0;
+  int score = -INF;
+  vector<int> pv;
+};
+
+// MultiPV root. Each move is searched with a window whose lower bound is the
+// score of the current Nth best line, so a move's score is exact whenever it
+// can enter the reported set, and moves that cannot are abandoned cheaply.
+// Only the top nLines lines are kept; scores below the cut are bounds, which
+// is what UCI MultiPV requires.
+static vector<RootLine> rootSearchMulti(int depth, int nLines, const vector<RootLine>& prev) {
+  const int n = generateMoves(0, false);
+  for (int i = 0; i < n; i++) {
+    const uint32_t mv = moveBuf[i];
+    int sc = moveScore(mv, 0, 0, 0);
+    for (int k = 0; k < (int)prev.size(); k++) {
+      if (prev[(size_t)k].move == mv) { sc = (1 << 29) - k; break; }
+    }
+    scoreBuf[i] = sc;
+  }
+
+  vector<RootLine> found;
+  int alphaN = -INF;
+  for (int i = 0; i < n; i++) {
+    const uint32_t mv = pickMove(0, n, i);
+    makeMove(mv);
+    if (attacked(kingSq[side ^ 1], side)) { unmakeMove(mv); continue; }
+    moveStack[0] = mv;
+
+    const int sc = -negamax(depth - 1, -INF, -alphaN, 1, true);
+    const int pvLen = pvLength[1];
+    unmakeMove(mv);
+    if (searchStop) break;
+    if ((int)found.size() >= nLines && sc <= alphaN) continue;
+
+    RootLine rl;
+    rl.move = mv;
+    rl.score = sc;
+    rl.pv.push_back((int)mv);
+    for (int j = 1; j < pvLen; j++) rl.pv.push_back(pvTable[MAX_PLY + j]);
+    size_t pos = 0;
+    while (pos < found.size() && found[pos].score >= sc) pos++;
+    found.insert(found.begin() + (long)pos, rl);
+    if ((int)found.size() > nLines) found.pop_back();
+    if ((int)found.size() == nLines) alphaN = found.back().score;
+  }
+  return found;
+}
+
 static string scoreToUci(int sc) {
   auto ceilDiv2 = [](int v) { return v >= 0 ? (v + 1) / 2 : -((-v + 1) / 2); };
   if (sc > MATE - 1000) return "mate " + to_string(ceilDiv2(MATE - sc));
@@ -1816,6 +1943,7 @@ struct SearchOpts {
   int movestogo = 0;
   int depth = 0;
   u64 nodeBudget = 0;
+  int multiPv = 1;
   bool infinite = false;
 };
 
@@ -1919,10 +2047,62 @@ static SearchResult search(const SearchOpts& rawOpts) {
   int prevScore = 0;
   uint32_t prevIterMove = 0;
   int stable = 0;
+  const int nLines = min(8, max(1, opts.multiPv));
+  vector<RootLine> prevLines;
   vector<string> lastPv;
 
   for (int d = 1; d <= maxDepth; d++) {
     const i64 iterStart = nowMs();
+
+    if (nLines > 1) {
+      vector<RootLine> lines = rootSearchMulti(d, nLines, prevLines);
+      if (searchStop) break;
+      if (lines.empty()) {
+        rootScore = attacked(kingSq[side], side ^ 1) ? -MATE : 0;
+        rootBest = 0;
+        rootDepth = 1;
+        if (threadId == 0) {
+          const i64 elapsed = max((i64)1, nowMs() - started);
+          ostringstream line;
+          line << "info depth 1 score " << scoreToUci(rootScore)
+               << " nodes " << nodes
+               << " nps " << (nodes * 1000 / (u64)elapsed)
+               << " time " << elapsed;
+          emitInfo(line.str());
+        }
+        break;
+      }
+      prevLines = lines;
+      prevScore = lines[0].score;
+      rootBest = (int)lines[0].move;
+      rootScore = lines[0].score;
+      rootDepth = d;
+      rootPrevBest = rootBest;
+      lastPv.clear();
+      for (int m : lines[0].pv) lastPv.push_back(moveToStr((uint32_t)m));
+
+      if (threadId == 0) {
+        const i64 elapsed = max((i64)1, nowMs() - started);
+        for (int k = 0; k < (int)lines.size(); k++) {
+          ostringstream line;
+          line << "info depth " << d << " multipv " << (k + 1)
+               << " score " << scoreToUci(lines[(size_t)k].score)
+               << " nodes " << nodes
+               << " nps " << (nodes * 1000 / (u64)elapsed)
+               << " time " << elapsed << " pv";
+          for (int m : lines[(size_t)k].pv) line << " " << moveToStr((uint32_t)m);
+          emitInfo(line.str());
+        }
+      }
+
+      if (abs(rootScore) > MATE - 100) break;
+      const i64 elapsed = nowMs() - started;
+      if (nowMs() >= softStop) break;
+      if (moveAlloc && elapsed >= moveAlloc * 55 / 100) break;
+      if (moveAlloc && elapsed + (nowMs() - iterStart) * 16 / 10 >= moveAlloc) break;
+      continue;
+    }
+
     RootResult res;
     if (d >= 5 && abs(prevScore) < MATE - 100) {
       int delta = 40;
@@ -2375,11 +2555,17 @@ int main(int argc, char** argv) {
       clearTT();
       SearchOpts o;
       o.depth = 12;
+      const i64 c0 = cpuMs();
       SearchResult r = search(o);
-      printf("bestmove %s  score %s  depth %d  nodes %llu  time %lldms  nps %llu\n",
+      const i64 cpu = max((i64)1, cpuMs() - c0);
+      printf("bestmove %s  score %s  depth %d  nodes %llu  time %lldms  nps %llu"
+             "  cpu %lldms  cpunps %llu  extras %llu/%llu\n",
              r.bestMoveStr.c_str(), scoreToUci(r.score).c_str(), r.depth,
              (unsigned long long)r.nodes, (long long)r.time,
-             (unsigned long long)(r.nodes * 1000 / (u64)max((i64)1, r.time)));
+             (unsigned long long)(r.nodes * 1000 / (u64)max((i64)1, r.time)),
+             (long long)cpu,
+             (unsigned long long)(r.nodes * 1000 / (u64)cpu),
+             (unsigned long long)exMisses, (unsigned long long)exCalls);
       return 0;
     }
   }
@@ -2399,11 +2585,12 @@ int main(int argc, char** argv) {
     if (cmd.empty()) continue;
 
     if (cmd == "uci") {
-      emitInfo("id name KiwaChess 2.3.0");
-      emitInfo("id author Kiwa");
+      emitInfo("id name FroostRook 1 Beta");
+      emitInfo("id author ziyyhhk");
       emitInfo("id string core C++ native");
       emitInfo("option name Threads type spin default 1 min 1 max 8");
       emitInfo("option name Hash type spin default 64 min 1 max 512");
+      emitInfo("option name MultiPV type spin default 1 min 1 max 8");
       emitInfo("option name OwnBook type check default true");
       emitInfo("option name Book Depth type spin default 24 min 0 max 60");
       emitInfo("option name Book Variety type spin default 100 min 0 max 100");
@@ -2442,6 +2629,8 @@ int main(int argc, char** argv) {
         if (name == "hash") {
           stopSearch();
           resizeTT(atoi(value.c_str()));
+        } else if (name == "multipv") {
+          multiPvOption = max(1, min(8, atoi(value.c_str())));
         } else if (name == "clear hash") {
           stopSearch();
           clearTT();
@@ -2519,9 +2708,11 @@ int main(int argc, char** argv) {
         else if (token == "movetime") iss >> o.movetime;
         else if (token == "infinite") o.infinite = true;
       }
-      // Book replies are instant. Explicit depth/node/infinite searches are
-      // analysis requests, so the book stays out of those.
-      if (ownBook && bookAllowed && !o.depth && !o.nodeBudget && !o.infinite) {
+      // Book replies are instant. Explicit depth/node/infinite searches and
+      // MultiPV are analysis requests, so the book stays out of those.
+      o.multiPv = multiPvOption;
+      if (ownBook && bookAllowed && !o.depth && !o.nodeBudget && !o.infinite &&
+          multiPvOption <= 1) {
         const uint32_t bm = bookPick();
         if (bm) {
           const string mv = moveToStr(bm);
@@ -2534,7 +2725,9 @@ int main(int argc, char** argv) {
       abortFlag.store(false);
       const string fen = gameFen;
       const vector<string> moves = gameMoves;
-      const int nthreads = threads;
+      // MultiPV output is a single ordered list; helper threads would emit
+      // competing lines, so MultiPV runs the search on one thread.
+      const int nthreads = multiPvOption > 1 ? 1 : threads;
       searchThread = thread([o, fen, moves, nthreads]() {
         if (nthreads <= 1) {
           threadId = 0;
@@ -2648,10 +2841,13 @@ int main(int argc, char** argv) {
       clearTT();
       SearchOpts o;
       o.depth = 12;
+      const i64 c0 = cpuMs();
       SearchResult r = search(o);
+      const i64 cpu = max((i64)1, cpuMs() - c0);
       ostringstream s;
       s << "bench depth " << r.depth << " nodes " << r.nodes << " time " << r.time
         << "ms nps " << (r.nodes * 1000 / (u64)max((i64)1, r.time))
+        << " cpu " << cpu << "ms cpunps " << (r.nodes * 1000 / (u64)cpu)
         << " best " << r.bestMoveStr;
       emitInfo(s.str());
     }

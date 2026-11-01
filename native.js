@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * UCI client for the native Kiwa engine (native/kiwa-native.exe).
+ * UCI client for the native FroostRook engine (native/FroostRook.exe).
  * One long-lived process; one search at a time.
  */
 
@@ -9,7 +9,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-const EXE = process.env.KIWA_NATIVE || path.join(__dirname, 'native', 'kiwa-native.exe');
+const EXE = require('./native-exe');
 
 class NativeEngine {
   constructor(exe = EXE) {

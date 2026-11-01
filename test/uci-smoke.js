@@ -69,8 +69,8 @@ function assert(cond, msg) {
 (async () => {
   send('uci');
   await waitFor(l => l === 'uciok', 15000, 'uciok');
-  assert(lines.some(l => l.startsWith('id name KiwaChess 2.3.0')), 'engine identifies itself');
-  for (const opt of ['Threads', 'Hash', 'OwnBook', 'Book Depth', 'Book Variety', 'Book Style',
+  assert(lines.some(l => l.startsWith('id name FroostRook 1 Beta')), 'engine identifies itself');
+  for (const opt of ['Threads', 'Hash', 'MultiPV', 'OwnBook', 'Book Depth', 'Book Variety', 'Book Style',
                      'Opening Diversity', 'Random Seed', 'Clear Book Memory', 'Move Overhead', 'Clear Hash']) {
     assert(lines.some(l => l.startsWith(`option name ${opt} `)), `advertises ${opt}`);
   }
@@ -173,6 +173,24 @@ function assert(cond, msg) {
   send('go movetime 400');
   const bm2 = await waitFor(l => l.startsWith('bestmove '), 15000);
   assert(/^bestmove [a-h][1-8][a-h][1-8][qrbn]?$/.test(bm2), `search returned a move: ${bm2}`);
+
+  // MultiPV must emit numbered, ordered lines and keep bestmove equal to line 1.
+  send('setoption name MultiPV value 3');
+  send('position startpos');
+  const mpvMark = lines.length;
+  send('go depth 6');
+  const mpvBest = await waitFor(l => l.startsWith('bestmove '), 20000, 'multipv bestmove');
+  const mpvLines = lines.slice(mpvMark).filter(l => l.includes(' multipv '));
+  const lastDepth = Math.max(...mpvLines.map(l => +l.match(/^info depth (\d+)/)[1]), 0);
+  const atLast = mpvLines.filter(l => +l.match(/^info depth (\d+)/)[1] === lastDepth);
+  const numsSeen = new Set(atLast.map(l => +l.match(/ multipv (\d+)/)[1]));
+  assert(atLast.length >= 3 && numsSeen.size === 3, `MultiPV emitted ${atLast.length} lines at depth ${lastDepth}: ${[...numsSeen]}`);
+  const mpvMoves = atLast.map(l => l.match(/ pv (\S+)/)[1]);
+  assert(mpvBest.split(' ')[1] === mpvMoves[0], `bestmove matches multipv 1: ${mpvBest} vs ${mpvMoves[0]}`);
+  assert(new Set(mpvMoves).size === 3, `MultiPV lines are distinct: ${mpvMoves.join(',')}`);
+  const mpvScores = atLast.map(l => +l.match(/ score cp (-?\d+)/)[1]);
+  assert(mpvScores[0] >= mpvScores[1] && mpvScores[1] >= mpvScores[2], `MultiPV scores ordered: ${mpvScores}`);
+  send('setoption name MultiPV value 1');
 
   // Back-rank mate in one: Re8#.
   send('position fen 6k1/5ppp/8/8/8/8/5PPP/4R1K1 w - - 0 1');

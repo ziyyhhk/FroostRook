@@ -33,7 +33,7 @@ const path = require('path');
 const fs = require('fs');
 const rules = require('../engine.js');
 
-const EXE = process.env.KIWA_NATIVE || path.join(__dirname, '..', 'native', 'kiwa-native.exe');
+const EXE = require('../native-exe');
 const REPS = Math.max(1, parseInt(process.env.KIWA_BENCH_REPS, 10) || 3);
 const TIMEOUT = Math.max(1000, parseInt(process.env.KIWA_BENCH_TIMEOUT, 10) || 120000);
 const HASH_MB = Math.max(1, parseInt(process.env.KIWA_BENCH_HASH, 10) || 64);

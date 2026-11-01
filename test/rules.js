@@ -224,7 +224,7 @@ check('promotion and underpromotion', () => {
 async function nativeChecks() {
   const native = require('../native.js');
   if (!native.available()) {
-    console.log('SKIP  native rules checks (native/kiwa-native.exe not found)');
+    console.log('SKIP  native rules checks (native core executable not found)');
     return;
   }
 

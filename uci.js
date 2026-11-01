@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * UCI front-end for Kiwa.
+ * UCI front-end for FroostRook 1 Beta.
  * Usage: node uci.js
  *
  * Extra commands (not standard UCI):
@@ -55,6 +55,7 @@ let bookVariety = 100;
 let bookStyle = 'balanced';
 let openingDiversity = 50;
 let randomSeed = 0;
+let multiPv = 1;
 
 // Session memory for the fallback book. Deliberately not cleared by
 // ucinewgame; aging keeps recent games dominant.
@@ -130,6 +131,8 @@ function handleSetOption(tokens) {
     reseedBook();
   } else if (key === 'clear book memory') {
     book.clearMemory(bookMemory);
+  } else if (key === 'multipv') {
+    multiPv = Math.max(1, Math.min(8, Math.floor(+value) || 1));
   }
   if (native.available()) native.setOption(name, value);
 }
@@ -180,7 +183,8 @@ function handleGo(tokens) {
   const fen = engine.getFen();
   const bookEligible =
     !native.available() && ownBook && bookDepth > 0 && posBase === 'startpos' &&
-    posMoves.length < bookDepth && !opts.infinite && !opts.depth && !opts.nodes;
+    posMoves.length < bookDepth && !opts.infinite && !opts.depth && !opts.nodes &&
+    multiPv <= 1;
   if (bookEligible) {
     const bookMove = book.pick(fen, {
       variety: bookVariety,
@@ -247,11 +251,12 @@ rl.on('line', line => {
 
   switch (cmd) {
     case 'uci':
-      process.stdout.write('id name KiwaChess 2.3.0\n');
-      process.stdout.write('id author Kiwa\n');
+      process.stdout.write('id name FroostRook 1 Beta\n');
+      process.stdout.write('id author ziyyhhk\n');
       process.stdout.write(`id string core ${native.available() ? 'C++ native' : 'JavaScript (fallback)'}\n`);
       process.stdout.write('option name Threads type spin default 1 min 1 max 8\n');
       process.stdout.write('option name Hash type spin default 64 min 1 max 512\n');
+      process.stdout.write('option name MultiPV type spin default 1 min 1 max 8\n');
       process.stdout.write('option name OwnBook type check default true\n');
       process.stdout.write('option name Book Depth type spin default 24 min 0 max 60\n');
       process.stdout.write('option name Book Variety type spin default 100 min 0 max 100\n');
