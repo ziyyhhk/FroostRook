@@ -199,17 +199,17 @@ summary, and exits non-zero on any failure.
 
 ## Performance and limitations
 
-Measured on this Windows 10 machine with the KiwaChess 2.3.0 native core
-(before the FroostRook search upgrade, so current timings are faster):
+Measured with the FroostRook 1 Beta native core on this Windows 10 machine:
 
-- depth 12 opening search: about 2 s per position (about 1.0M nodes);
-- `go nodes 20000`: about 35-50 ms per position;
-- the test suite's real-game case (10 plies, 20 searches at nodes 20000):
-  about 4 s;
-- a 40-move game at the default depth 12 (80 plies, 160 searches, first game
-  of `test/human-games/Ayaan-07.pgn`, `--max-plies 80`): **170 s** (2 min 50 s)
-  in total, including PGN replay and JSON writing.  Average search time was
-  therefore about 1.1 s per position for this game.
+- depth-12 start-position search: 0.668–0.694 s, 590,750 nodes (seven-run
+  bench, idle machine; see [TESTING.md](TESTING.md));
+- the regression suite's real-game case (10 plies, 20 searches at
+  `nodes 20000`) completes in about 2.5 s including process startup.
+
+The older 2.3.0 figures (about 2 s per depth-12 search, 170 s for a 40-move
+game) are history and are not current measurements. No full 40-move game at
+depth 12 was timed for this release; analysis cost scales with the number of
+positions searched (two per ply).
 
 Because two searches are performed per analyzed move, a full game at depth 12
 takes time proportional to twice the number of plies. Use `--max-plies`,

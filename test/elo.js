@@ -357,7 +357,7 @@ async function playGame(kiwa, sf, opening, kiwaIsWhite, gameNo) {
 }
 
 // Filled in after the handshake so the PGN names the real engines.
-const NAMES = { kiwa: 'Kiwa', opp: 'Opponent' };
+const NAMES = { kiwa: 'FroostRook 1 Beta', opp: 'Opponent' };
 
 function movesToPgn(game, openingName) {
   const list = game.sanMoves || game.moves;
@@ -368,7 +368,7 @@ function movesToPgn(game, openingName) {
     const black = list[i + 1];
     body.push(`${n}. ${white}${black ? ' ' + black : ''}`);
   }
-  return `[Event "${DUEL ? 'Kiwa engine duel' : 'Kiwa Elo measurement'}"]\n[Site "local"]\n` +
+  return `[Event "${DUEL ? 'FroostRook engine duel' : 'FroostRook Elo measurement'}"]\n[Site "local"]\n` +
          `[White "${game.kiwaIsWhite ? NAMES.kiwa : NAMES.opp}"]\n` +
          `[Black "${game.kiwaIsWhite ? NAMES.opp : NAMES.kiwa}"]\n` +
          `[Result "${game.pgnResult}"]\n[Opening "${openingName}"]\n` +
@@ -383,7 +383,7 @@ function movesToPgn(game, openingName) {
     throw new Error('Stockfish not found: ' + SF_EXE + ' (use --stockfish PATH or STOCKFISH env)');
   }
 
-  const kiwa = new UciEngine('Kiwa', KIWA_EXE);
+  const kiwa = new UciEngine('FroostRook', KIWA_EXE);
   const sf = new UciEngine(DUEL ? 'Opponent' : 'Stockfish', DUEL ? OPP_EXE : SF_EXE);
 
   await kiwa.handshake(Object.assign({ Hash: 64, 'Move Overhead': 30 },
@@ -401,7 +401,7 @@ function movesToPgn(game, openingName) {
   NAMES.kiwa = kiwa.name;
   NAMES.opp = sf.name;
 
-  console.log(DUEL ? 'Kiwa engine duel' : 'Kiwa Elo measurement');
+  console.log(DUEL ? 'FroostRook engine duel' : 'FroostRook Elo measurement');
   console.log(`engine     ${kiwa.name}  (${KIWA_EXE})`);
   console.log(`opponent   ${sf.name}  (${OPP_EXE || SF_EXE})` +
               (DUEL ? '' : `, UCI_LimitStrength, UCI_Elo ${ANCHOR}`));
@@ -429,7 +429,7 @@ function movesToPgn(game, openingName) {
       else if (g.result === 0.5) draws++;
       else losses++;
       const tag = g.result === 1 ? 'WIN ' : g.result === 0.5 ? 'DRAW' : 'LOSS';
-      console.log(`  game ${gameNo}: Kiwa ${kiwaIsWhite ? 'white' : 'black'} ${tag}  ` +
+      console.log(`  game ${gameNo}: FroostRook ${kiwaIsWhite ? 'white' : 'black'} ${tag}  ` +
                   `${g.reason}, ${g.plies} plies, ${g.seconds.toFixed(1)}s`);
     }
   }
@@ -437,7 +437,7 @@ function movesToPgn(game, openingName) {
   const n = games.length;
   const pct = (100 * score / n).toFixed(1);
   console.log('');
-  console.log(`Kiwa score ${score}/${n}  (+${wins} =${draws} -${losses}) = ${pct}%`);
+  console.log(`FroostRook score ${score}/${n}  (+${wins} =${draws} -${losses}) = ${pct}%`);
 
   const asWhite = games.filter(g => g.kiwaIsWhite);
   const asBlack = games.filter(g => !g.kiwaIsWhite);

@@ -43,6 +43,15 @@ jobs:
           out2=$(printf 'position fen 7k/5Q2/6K1/8/8/8/8/8 b - - 0 1\ngo depth 2\nquit\n' | native/FroostRook.exe)
           echo "$out2" | grep -q 'bestmove 0000'
 
+      - name: Build NNUE experiment and run its parity self-test
+        shell: msys2 {0}
+        run: |
+          cd native
+          g++ -O3 -std=c++17 -static -o nnue_bench.exe nnue.cpp nnue_bench.cpp
+          cd ..
+          ./native/nnue_bench.exe data/nnue/frnn1.bin data/nnue/selftest.txt > nnue-selftest.log 2>&1
+          tail -8 nnue-selftest.log
+
       - name: Node regression tests
         shell: bash
         run: |
@@ -62,10 +71,14 @@ jobs:
         run: |
           version=$(node -p "require('./package.json').version")
           dir="dist/FroostRook-$version"
-          mkdir -p "$dir/native" "$dir/data" "$dir/test" "$dir/docs"
+          mkdir -p "$dir/native" "$dir/data/nnue" "$dir/test" "$dir/docs"
           cp native/FroostRook.exe "$dir/"
           cp FroostRook.bat README.md engine.js uci.js native.js native-exe.js book.js play.js package.json predict-model.js analyze.js "$dir/"
           cp native/book_data.h native/kiwa.cpp native/build.bat "$dir/native/"
+          cp native/nnue.h native/nnue.cpp native/nnue_bench.cpp native/nnue_bench.exe "$dir/native/"
+          cp data/nnue/* "$dir/data/nnue/"
+          cp -r tools "$dir/"
+          cp -r assets "$dir/"
           cp data/*.json "$dir/data/"
           cp docs/*.md "$dir/docs/"
           cp wacnew.epd "$dir/"
@@ -73,8 +86,9 @@ jobs:
           cp test/*.js test/*.md "$dir/test/"
           cp -r test/data "$dir/test/"
           cp -r test/human-games "$dir/test/"
-          ( cd dist && powershell -Command "Compress-Archive -Path 'FroostRook-$version' -DestinationPath 'FroostRook-$version-full.zip' -Force" )
+          ( cd dist && python -c "import shutil; shutil.make_archive('FroostRook-$version-full','zip','.','FroostRook-$version')" )
           git archive --format=zip --output="dist/FroostRook-$version-source.zip" HEAD
+          python -c "import zipfile; z=zipfile.ZipFile('dist/FroostRook-$version-full.zip'); bad=[n for n in z.namelist() if '\\\\' in n]; print('zip entries with backslashes:', len(bad)); assert not bad"
           ls -l dist/
 
       - uses: actions/upload-artifact@v4
@@ -93,5 +107,5 @@ jobs:
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
             gh release create "$GITHUB_REF_NAME" --title "FroostRook 1 Beta" \
-              --notes "Portable Windows x64 build (generic x86-64, no CPU-specific instructions). Import FroostRook.exe directly into any UCI GUI. FroostRook-1.0.0-beta-full.zip adds the Node front-end, opening book, learned prediction model, PGN analysis tool and the test suite. Source code archives are attached automatically and as a source ZIP. See the README and docs/ANALYSIS.md for UCI options, analysis usage and measured test results."
+              --notes "Portable Windows x64 build (generic x86-64, no CPU-specific instructions). Import FroostRook.exe directly into any UCI GUI. FroostRook-1.0.0-beta-full.zip adds the Node front-end, opening book, learned prediction model, PGN analysis tool, test suite and the experimental FRNN1 NNUE module (not used by the playing engine). Source code archives are attached automatically and as a source ZIP. See README.md, docs/UCI.md, docs/NNUE.md and docs/TESTING.md for options, measured results and the full test report."
           gh release upload "$GITHUB_REF_NAME" native/FroostRook.exe dist/*-full.zip dist/*-source.zip --clobber

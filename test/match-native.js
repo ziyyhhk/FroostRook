@@ -65,7 +65,7 @@ async function playGame(nativeIsWhite) {
 }
 
 (async () => {
-  console.log(`Kiwa native vs JS @ ${ms} ms/move, ${games} games`);
+  console.log(`FroostRook native vs JS @ ${ms} ms/move, ${games} games`);
   let score = 0, wins = 0, draws = 0, losses = 0;
   for (let i = 0; i < games; i++) {
     const nativeIsWhite = i % 2 === 0;

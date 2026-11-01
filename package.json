@@ -8,7 +8,7 @@
     "uci": "node uci.js",
     "build:native": "native/build.bat",
     "test": "node test/perft.js && node test/bench.js",
-    "test:all": "node test/perft.js && node test/perft-native.js && node test/rules.js && node test/book-check.js && node test/prediction.js && node test/uci-smoke.js && node test/stop-test.js && node test/openings-native.js 20 6 && node test/book-fallback.js",
+    "test:all": "node test/perft.js && node test/perft-native.js && node test/rules.js && node test/book-check.js && node test/prediction.js && node test/uci-smoke.js && node test/stop-test.js && node test/openings-native.js 20 6 && node test/book-fallback.js && node test/analyze-test.js",
     "test:native": "node test/perft-native.js && node test/wac-native.js 300 300",
     "test:rules": "node test/rules.js",
     "test:uci": "node test/uci-smoke.js",

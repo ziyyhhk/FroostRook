@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * Kiwa's opening book. Keyed by the first three FEN fields (board, side to
+ * FroostRook's opening book. Keyed by the first three FEN fields (board, side to
  * move, castling rights), so transpositions share an entry.
  *
  * Each move is stored as [uci, balanced, mainline, aggressive, gambit, solid,

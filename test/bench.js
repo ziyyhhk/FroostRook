@@ -66,7 +66,7 @@ function playGame(engineSide, opponent, ms) {
 }
 
 function match(opponent, games, ms) {
-  console.log(`\n=== Kiwa ${ms}ms/move vs ${opponent} (${games} games) ===`);
+  console.log(`\n=== FroostRook ${ms}ms/move vs ${opponent} (${games} games) ===`);
   let score = 0;
   let wins = 0, draws = 0, losses = 0;
   for (let i = 0; i < games; i++) {

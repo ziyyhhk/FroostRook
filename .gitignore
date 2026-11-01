@@ -1,10 +1,12 @@
 node_modules/
 *.log
+!data/nnue/*.log
 # Built binaries: releases and CI artifacts carry them, not git history.
 dist/
 native/kiwa-native.exe
 native/KiwaChess.exe
 native/FroostRook.exe
+native/nnue_bench.exe
 
 # Local build/measure artifacts (never committed)
 .build/

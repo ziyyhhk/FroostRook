@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * Kiwa — a from-scratch chess engine (0x88 board, alpha-beta, TT, NN-less eval).
+ * FroostRook — a from-scratch chess engine (0x88 board, alpha-beta, TT, handcrafted eval).
  * Runs on Node. Also exposes a "predict" mode that estimates which move a human
  * is most likely to play, using search scores blended with human-move priors.
  */

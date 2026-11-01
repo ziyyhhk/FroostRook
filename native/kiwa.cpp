@@ -1711,16 +1711,12 @@ static int negamax(int depth, int alpha, int beta, int ply, bool canNull) {
     moveStack[ply] = mv;
 
     const bool givesCheck = attacked(kingSq[side], side ^ 1);
-    // Shallow pruning of quiet moves. Checks, captures and promotions are
+    // Futility pruning of quiet moves. Checks, captures and promotions are
     // never pruned, and the first legal move is always searched, so a forced
     // reply or a mate score cannot be lost; only the recursive call is saved.
 #ifndef FR_NO_PRUNING
     if (!inCheck && legal > 1 && !(flags & F_CAP) && !promo && !givesCheck) {
       if (depth <= 3 && staticEval != -INF && staticEval + 100 + 100 * depth <= alpha) {
-        unmakeMove(mv);
-        continue;
-      }
-      if (depth <= 4 && legal > 6 + depth * depth) {
         unmakeMove(mv);
         continue;
       }

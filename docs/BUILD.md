@@ -76,3 +76,18 @@ has no native binary, so CI always builds one.
 `test/wac-native.js 300 <ms>` runs the 300 WAC positions at a time budget;
 `test/elo.js` runs anchored or head-to-head matches (see `--help` in the file
 header). Both are measurement tools, not part of the default suite.
+
+## NNUE experiment (optional, not used by the engine)
+
+The FRNN1 prototype has its own inference program and is not linked into
+`FroostRook.exe`:
+
+```
+cd native
+g++ -O3 -std=c++17 -static -o nnue_bench.exe nnue.cpp nnue_bench.cpp
+cd ..
+./native/nnue_bench.exe data/nnue/frnn1.bin data/nnue/selftest.txt
+```
+
+It prints the 192-position parity check, the incremental-accumulator check and
+timing, and exits non-zero on failure. Training is documented in `NNUE.md`.
