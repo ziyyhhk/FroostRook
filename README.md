@@ -171,14 +171,18 @@ control results, not a rating. Sample-error intervals cover game noise only.
 
 ### Search and speed
 
-Depth-12 bench from the start position, portable generic x86-64 builds, nine
-interleaved runs each on an otherwise idle machine:
+Depth-12 bench from the start position, portable generic x86-64 builds. The
+2.3.0, 1.0.0 and 1.0.1 rows are nine interleaved runs each on an otherwise
+idle machine. The 1.0.2 row is from the five-run CPU-only set in
+[docs/TESTING.md](docs/TESTING.md#10-evaluation-rework-2026-11-03-shipped-as-102-beta),
+where wall-clock time was not recorded:
 
 | Build | nodes | wall time median (range) | CPU NPS median | wall NPS median (range) |
 | --- | --- | --- | --- | --- |
 | KiwaChess 2.3.0 baseline | 680,757 | 702 ms (664–768) | not instrumented | 0.970 M (0.886–1.025) |
 | FroostRook 1.0.0-beta | 590,750 | 630 ms (605–707) | 0.995 M | 0.938 M (0.836–0.976) |
 | FroostRook 1.0.1-beta | 567,818 | 621 ms (593–639) | 0.956 M | 0.914 M (0.889–0.958) |
+| FroostRook 1.0.2-beta | 573,342 | not recorded | 0.719 M | not recorded |
 
 Against 2.3.0 the patch visits 16.6% fewer nodes and reaches the same depth
 11.5% sooner, while raw wall NPS is 5.7% lower. Against 1.0.0-beta it visits
@@ -186,6 +190,13 @@ Against 2.3.0 the patch visits 16.6% fewer nodes and reaches the same depth
 lower and CPU NPS 3.9% lower, consistent with SEE ordering making each node
 slightly costlier. **This is a time-to-depth improvement, not an NPS
 recovery.**
+
+In the five-run set where both evaluation builds were measured interleaved,
+the 1.0.1 control ran at 1.010 M CPU NPS and 1.0.2 at 0.719 M, so the new
+terms cost about 29% per node. 1.0.2 visits about 1% more nodes and reaches
+depth 12 in 797 ms of CPU time versus 562 ms for 1.0.1. The 55.0% match score
+is at fixed time, so it is achieved despite this cost, not by searching more
+nodes.
 
 The previous release documented 0.75 → 0.47 M (portable) and 0.72 → 0.54 M
 (native). Those figures cannot be reproduced with this bench: the 2.3.0
@@ -252,19 +263,40 @@ engine; reaching 3000 requires an integrated NNUE and far more testing.
 
 WAC (300 positions), each build run separately on the same hardware:
 
-| Budget | KiwaChess 2.3.0 | 1.0.0-beta | 1.0.1-beta |
-| --- | --- | --- | --- |
-| 100,000 nodes/move | 223/300 | 238/300 | 248/300 |
-| 100 ms/move (median of 3) | 236/300 | 234/300 | 241/300 |
+| Budget | KiwaChess 2.3.0 | 1.0.0-beta | 1.0.1-beta | 1.0.2-beta |
+| --- | --- | --- | --- | --- |
+| 100,000 nodes/move | 223/300 | 238/300 | 248/300 | 248/300 |
+| 100 ms/move (median of 3) | 236/300 | 234/300 | 241/300 | not measured |
 
 WAC rewards tactics and is not a playing-strength rating; it is reported
 because it separates search changes from noise. At a fixed node budget the
 patch solves 10 more positions than 1.0.0-beta and 25 more than 2.3.0 (248 vs
-238 vs 223). At 100 ms the patch's three runs were 239, 241 and 242 (median
+238 vs 223); 1.0.2 also solves 248/300, and its timed WAC was not re-run. At
+100 ms the patch's three runs were 239, 241 and 242 (median
 241), versus 233–236 for 1.0.0-beta and 232–236 for 2.3.0. The timed gain over
 1.0.0-beta (+7) is smaller than the fixed-node gain and sits within this
 fixture's run-to-run spread; the deterministic fixed-node result is the
 stronger evidence.
+
+### Elo by version
+
+| Version | Stockfish `UCI_Elo 2200` performance (95% CI) | Score vs KiwaChess 2.3.0 | Elo vs 2.3.0 (95% CI) |
+| --- | --- | --- | --- |
+| KiwaChess 2.3.0 | 2261 (2151–2371) | control | — |
+| FroostRook 1.0.0-beta | 2209 (2101–2317) | 51.3% (40 games, 100 ms) | +9 (−99 to +116) |
+| FroostRook 1.0.1-beta | 2180 (2117–2243) | 46.7% (60 games, 60 ms) | −23 (−111 to +65) |
+| FroostRook 1.0.2-beta | not measured | 55.0% (80 games, 60 ms) | +35 (−41 to +111) |
+
+Stockfish matches used 100 ms/move with the book on: 40 games for 2.3.0 and
+1.0.0, 120 for 1.0.1. The 2.3.0 matches used no book; 1.0.0 played at
+100 ms/move, while 1.0.1 and 1.0.2 played at 60 ms/move, so the 1.0.0 row is
+not directly comparable to the other two. The four 1.0.2 evaluation runs
+together are 55.2% over 280 games (+36, 95% CI −6 to +78). 1.0.2 has **no
+Stockfish anchor**: applying its +58 Elo common-opponent swing to 1.0.1's
+2180 would imply roughly 2238, but that is an extrapolation, not a
+measurement. The direct 1.0.1-vs-1.0.2 match has not been run; the +58 figure
+assumes transitivity through 2.3.0. No comparable Elo measurement exists in
+this report for Kiwa 2.0.1 or 2.2.0.
 
 ## NNUE prototype (experimental)
 
