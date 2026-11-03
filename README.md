@@ -11,7 +11,7 @@ This is the repository formerly named `ziyyhhk/kiwa-engine`. GitHub redirects
 the old URL and keeps the history, tags and releases.
 
 > **Name and version:** the public engine name is exactly **FroostRook 1 Beta**
-> (capital F, R and B). `1.0.1-beta` is the package version used in archives.
+> (capital F, R and B). `1.0.2-beta` is the package version used in archives.
 > The UCI handshake returns `id name FroostRook 1 Beta`.
 
 ## Contents
@@ -56,6 +56,21 @@ node analyze.js --pgn game.pgn --depth 12
 
 ## What changed in 1 Beta
 
+- **Evaluation (patch 1.0.2-beta):** a piece-threat term (pawns attacking
+  a piece, and undefended attacked pieces), king danger from weighted enemy
+  attacks on the king ring plus open files next to the king, a
+  rook-behind-passed-pawn bonus, and king-shield scoring removed from the
+  endgame half. The attack maps are built once per positional-cache miss and
+  the extras cache is larger; the depth-12 bench visits 573,342 nodes (versus
+  567,818 for 1.0.1-beta). WAC at 100,000 nodes is 248/300, equal to
+  1.0.1-beta. In 60 ms/move, no-book, paired-opening matches against
+  KiwaChess 2.3.0 the 1.0.2-beta build scores 55.0% over 80 games (+35 Elo,
+  95% CI −41 to +111); three earlier runs of the same evaluation scored 55.3%
+  over 200 games, so the four runs together are 55.2% over 280 games (+36,
+  95% CI −6 to +78). The shipped 1.0.1-beta scored 46.7% in the same fixture.
+  The new terms cost about 29% of CPU NPS, so the gain is measured at fixed
+  time with fewer nodes per second. See
+  [docs/TESTING.md](docs/TESTING.md#10-evaluation-rework-2026-11-03).
 - **Search (patch 1.0.1-beta):** internal iterative reduction was **removed**
   after A/B testing showed it cost tactics without a node win, and captures are
   now ordered by SEE instead of MVV-LVA. At depth 12 from the start position
@@ -192,6 +207,18 @@ for the shipped build, and is not in the release. That result is recorded in
 | 1.0.0-beta vs KiwaChess 2.3.0, 100 ms/move, no book, 20 colour-swapped openings | 40 | +16 =9 −15 | 51.3% | +9 (−99 to +116) |
 | 1.0.0-beta vs Stockfish `UCI_Elo 2200`, 100 ms/move, book on, 20 paired openings | 40 | +19 =3 −18 | 51.3% | performance 2209 (2101–2317) |
 | KiwaChess 2.3.0 control vs the same Stockfish setting | 40 | +23 =1 −16 | 58.8% | performance 2261 (2151–2371) |
+| **1.0.2-beta (new eval) vs KiwaChess 2.3.0, 60 ms/move, no book, 40 paired openings** | **80** | **+34 =20 −26** | **55.0%** | **+35 (−41 to +111)** |
+| Same evaluation before the rook-cache fix, three runs (30+30+40 pairs) | 200 | +93 =35 −72 | 55.3% | +37 (−12 to +85) |
+| For comparison: 1.0.1-beta release vs KiwaChess 2.3.0, same 60 ms fixture | 60 | +21 =14 −25 | 46.7% | −23 (−111 to +65) |
+
+The 1.0.2-beta evaluation was measured in four runs against the same 2.3.0
+binary and fixture: the corrected build scored 44/80, and three earlier runs
+(before the rook-behind-passer cache fix described in TESTING §10) scored
+38/60, 29.5/60 and 43/80. All four together are 154.5/280 = 55.2%, +36 Elo
+(95% CI −6 to +78). The same fixture measured the shipped 1.0.1-beta at
+46.7%, so the improvement over the release is direct. The 95% interval still
+touches zero, and the match is 60 ms/move bullet chess; treat +36 as a point
+estimate, not a rating.
 
 **The patch's gain is plausible but not proven, and the two tests disagree.**
 The new search build scored 53.1% over 240 games, a +22 Elo point estimate
@@ -297,7 +324,16 @@ The CI workflow builds the portable binary and runs the same set on
 ## Limitations and honest gaps
 
 - **No NNUE strength.** The prototype is not connected to search.
-- **No proven strength gain from the patch.** The 240-game duel against
+- **The 1.0.2-beta eval gain is a point estimate.** Four runs of the same
+  evaluation against 2.3.0 total 55.2% over 280 games, +36 Elo with a 95%
+  interval (−6 to +78) that still touches zero, in 60 ms/move games only. The
+  threat and king-safety weights are hand values, not tuned by SPSA or a
+  regression over a corpus.
+- **The 1.0.2-beta eval is about 29% slower per node** than 1.0.1-beta on the
+  depth-12 bench (median CPU NPS 719 k versus 1,010 k over five interleaved
+  runs on an idle laptop). The WAC result is unchanged (248 vs 248 of 300), and
+  the match gain is measured at fixed time despite fewer nodes per second.
+- **No proven strength gain from patch 1.0.1-beta.** The 240-game duel against
   1.0.0-beta scored 53.1% (+22 Elo, 95% CI −22 to +66), but the 120-game
   anchored match measured 2180 (2117–2243), below the previous release's 2209
   point estimate. The two samples disagree in sign; neither proves a change.

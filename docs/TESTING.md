@@ -6,6 +6,9 @@ number below came from a run of the binaries and scripts in this repository.
 No Elo, speed or accuracy figure is estimated or extrapolated.
 
 - Date of final runs: 2026-11-01.
+- Addendum 2026-11-04: section 10 covers the evaluation rework released as
+  1.0.2-beta, measured 2026-11-03 on the same hardware. The release hash below
+  still describes the previously shipped 1.0.1-beta engine.
 - Hardware: Intel Core i3-5005U (2 physical cores, 4 logical threads, 2.0 GHz),
   Windows 10 Home Single Language 10.0.19045, 8 GB RAM.
 - Toolchain: MSYS2 UCRT64 g++ 16.2.0 (`-O3 -std=c++17 -static`), Node.js
@@ -302,3 +305,83 @@ disabled by default so both engines play the same opening pairs from move one.
 - The NNUE is experimental and not integrated.
 - The icon is the approved supplied artwork with a derived transparent mask;
   see `assets/README.md`.
+
+1.0.2-beta (section 10):
+
+- The evaluation gain is measured only against KiwaChess 2.3.0 at 60 ms.
+- No Stockfish anchor was re-run for the new evaluation.
+- The threat and king-safety weights are hand values.
+- The evaluation costs ~29% CPU NPS; no incremental attack map exists yet.
+
+## 10. Evaluation rework (2026-11-03, shipped as 1.0.2-beta)
+
+The 1.0.1-beta build measured 46.7% in a direct 60 ms/move, no-book duel
+against KiwaChess 2.3.0 (21 W, 14 D, 25 L in 60 games; −23 Elo, ±45 1σ).
+Rather than guess, the search rule and the two new evaluation blocks were
+isolated with compile switches (`KIWA_FUTILITY`, `KIWA_THREATS`,
+`KIWA_KINGSAFETY`) and the deterministic WAC fixture at 100,000 nodes/move.
+The smaller edits (rook-behind-passer, shield scope, cache size, attack-map
+build) were not separately switched; build A carries them relative to the
+shipped binary.
+
+### Isolation
+
+Four binaries from the same source, differing only in the switches:
+
+| Build | 100k-node WAC | What it isolates |
+| --- | --- | --- |
+| 1.0.1-beta release (`cur.exe`) | 248/300 | shipped baseline |
+| A: futility on, no threat/king-safety | 245/300 | rook-passer + shield-scope edits only |
+| B: futility off, no threat/king-safety | 225/300 | cost of removing futility pruning |
+| C: futility on, threat + king safety | 249/300 | A plus the new evaluation terms |
+| D: futility off, threat + king safety | 231/300 | combination |
+
+Removing futility pruning costs 20 WAC positions at a fixed node budget (B vs
+A), and a no-futility build visits 655,930 nodes at depth 12 versus 567,818
+for the shipped build, so the rule pays for itself in time as well as tactics.
+The hypothesis that futility caused the game regression was therefore wrong
+and the rule was kept. The new evaluation terms are tactical-neutral-to-positive
+on this fixture (+4 over A), but they cost evaluation time (below).
+
+The A–D numbers predate the rook-behind-passer correction described under
+Matches: the bonus was stored in the pawn-keyed cache and stayed applied after
+the rook moved away. The corrected build scores 248/300.
+
+### Bench
+
+Five interleaved depth-12 runs each on the same laptop, which was idle for this
+set. Absolute NPS drifts between sessions with machine load, so only
+within-session comparisons are used:
+
+| Build | nodes | CPU NPS median (range) | CPU time median |
+| --- | --- | --- | --- |
+| 1.0.1-beta | 567,818 | 1,010 k (982–1,038 k) | 562 ms |
+| 1.0.2-beta (corrected) | 573,342 | 719 k (five identical readings) | 797 ms |
+
+The new terms cost about 29% of CPU NPS. The extras-cache miss count fell from
+266,107 to 236,516 of 311,829 calls when the table grew from 32 k to 128 k
+buckets; the remaining cost is the weighted attack map rebuilt on every miss.
+In an earlier five-run interleaved set, the larger cache and the single-pass
+map build recovered 13% CPU NPS relative to the first build with the same
+evaluation (median 540 k → 612 k).
+
+### Matches
+
+Same fixture as the baseline: 60 ms/move, book off, paired openings with
+colours swapped. Four runs of the new evaluation:
+
+| Build | Games | Result | Score | Elo (1σ) |
+| --- | --- | --- | --- | --- |
+| corrected build (final source) | 80 | +34 =20 −26 | 55.0% | +35 (±39) |
+| pre-fix, three runs (30+30+40 pairs) | 200 | +93 =35 −72 | 55.3% | +37 (±24.5) |
+| all four runs | 280 | +127 =55 −98 | 55.2% | +36 (±21) |
+
+The pooled 95% interval is −6 to +78. The corrected build is the one released
+as 1.0.2-beta; the three earlier runs share its evaluation except for the
+rook-cache fix. The shipped 1.0.1-beta scored 46.7% over 60 games in the same
+fixture.
+
+Honest reading: the improvement over the shipped build in the same fixture is
+direct, but +36 Elo is a point estimate whose 95% interval touches zero, the
+weights are hand-set rather than tuned, and the result is bullet chess. A
+longer time control or a tuned weight fit could change the ordering.
