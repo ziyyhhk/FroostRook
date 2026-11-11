@@ -17,6 +17,7 @@ the old URL and keeps the history, tags and releases.
 ## Contents
 
 - [Quick start](#quick-start)
+- [What changed in 1.0.3 Beta](#what-changed-in-103-beta)
 - [What changed in 1 Beta](#what-changed-in-1-beta)
 - [Engine and UCI](#engine-and-uci)
 - [Game analysis](#game-analysis)
