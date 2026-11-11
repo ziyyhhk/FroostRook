@@ -1,4 +1,4 @@
-# FroostRook 1 Beta icon
+# FroostRook 1.0.3 Beta icon
 
 The official mascot is the frozen-rook artwork supplied by the project owner
 (`engine-icon-approved.jpg`, 1024x1024). It is used as supplied; no other

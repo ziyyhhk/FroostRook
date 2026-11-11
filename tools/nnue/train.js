@@ -63,7 +63,7 @@ const HEADER_SIZE = 32;
 
 function parseArgs(argv) {
   const opts = { epochs: 24, batch: 64, lr: 0.002, l2: 1e-5, seed: 12345, minPly: 12,
-    w1mult: 1, w2mult: 1, w3mult: 1 };
+    w1mult: 1, w2mult: 1, w3mult: 1, dataset: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const val = () => {
@@ -80,8 +80,10 @@ function parseArgs(argv) {
     else if (a === '--w3mult') opts.w3mult = parseFloat(val());
     else if (a === '--seed') opts.seed = parseInt(val(), 10) >>> 0;
     else if (a === '--min-ply') opts.minPly = parseInt(val(), 10);
+    else if (a === '--dataset') opts.dataset = val();
     else if (a === '--help' || a === '-h') {
-      console.log('usage: node tools/nnue/train.js [--epochs N] [--batch N] [--lr F] [--l2 F] [--seed N] [--min-ply N] [--w1mult F] [--w2mult F] [--w3mult F]');
+      console.log('usage: node tools/nnue/train.js [--epochs N] [--batch N] [--lr F] [--l2 F] [--seed N] [--min-ply N] [--w1mult F] [--w2mult F] [--w3mult F] [--dataset PATH]');
+      console.log('  --dataset PATH  read a games.txt corpus (see tools/nnue/dataset.js) instead of test/human-games/*.pgn');
       process.exit(0);
     } else {
       throw new Error('unknown argument: ' + a);
@@ -121,7 +123,28 @@ function hash32(str) {
   return h >>> 0;
 }
 
-function loadGames() {
+function loadGames(opts) {
+  const optsDataset = opts.dataset;
+  if (optsDataset) {
+    // games.txt: '#'-prefixed header lines, then one game per line:
+    //   id \t result \t whiteElo \t blackElo \t timeControl \t source \t uci moves
+    // The dataset.js filter pass has already dropped non-standard variants,
+    // aborted games, time-forfeit losses and bullet games. The validation
+    // split stays train.js's job (game-level FNV-1a, same rule as before).
+    const text = fs.readFileSync(optsDataset, 'utf8');
+    const games = [];
+    for (const line of text.split('\n')) {
+      if (!line || line[0] === '#') continue;
+      const parts = line.split('\t');
+      if (parts.length < 7) continue;
+      const moves = parts[6].trim().split(/\s+/).filter(Boolean);
+      if (!parts[0] || !parts[1] || moves.length === 0) continue;
+      games.push({ id: parts[0], result: parts[1], moves });
+    }
+    if (!games.length) throw new Error('no games parsed from ' + optsDataset);
+    const plies = games.reduce((a, g) => a + g.moves.length, 0);
+    return { files: [optsDataset], games, plies, skipped: new Map() };
+  }
   const files = fs.readdirSync(PGN_DIR).filter(f => f.endsWith('.pgn')).sort();
   if (!files.length) throw new Error('no PGN files in ' + PGN_DIR);
   const texts = files.map(f => fs.readFileSync(path.join(PGN_DIR, f), 'utf8'));
@@ -305,6 +328,22 @@ function initNet(rng) {
   for (let j = 0; j < H2; j++) n.w3[j] = gaussian(rng) * 0.3;
   n.b3[0] = 0;
   return n;
+}
+
+// Deep copies of every learnable tensor, used to keep the validation-optimal
+// checkpoint. Exporting the final epoch instead (the previous behavior)
+// over-exports after the val-MSE optimum in later epochs.
+function snapshotNet(n) {
+  return {
+    w1: Float32Array.from(n.w1), b1: Float32Array.from(n.b1),
+    w2: Float32Array.from(n.w2), b2: Float32Array.from(n.b2),
+    w3: Float32Array.from(n.w3), b3: Float32Array.from(n.b3),
+  };
+}
+function restoreNet(n, s) {
+  n.w1.set(s.w1); n.b1.set(s.b1);
+  n.w2.set(s.w2); n.b2.set(s.b2);
+  n.w3.set(s.w3); n.b3.set(s.b3);
 }
 
 function relu(x) {
@@ -705,7 +744,7 @@ function main() {
   const started = Date.now();
   const rng = mulberry32(opts.seed);
 
-  const { files, games, plies, skipped } = loadGames();
+  const { files, games, plies, skipped } = loadGames(opts);
   header.push('# FRNN1 NNUE training log');
   header.push('# date: ' + new Date().toISOString());
   header.push('# data: test/human-games/*.pgn  files=' + files.length +
@@ -778,17 +817,27 @@ function main() {
   log('------+-----------+----------+-------+-------+----------+-----');
 
   let trainMSE = 0;
+  let bestVal = Infinity, bestEpoch = 0, bestSnap = null, lastVal = NaN;
   for (let e = 1; e <= opts.epochs; e++) {
     const t0 = Date.now();
     const res = trainEpoch(n, positions, trainIdx, opts, rng, state);
     trainMSE = res.mse;
     const vMSE = floatMSE(n, positions, valIdx);
+    lastVal = vMSE;
+    if (vMSE < bestVal) { bestVal = vMSE; bestEpoch = e; bestSnap = snapshotNet(n); }
     const secs = ((Date.now() - t0) / 1000).toFixed(1);
     log(String(e).padStart(5) + ' | ' + trainMSE.toFixed(6) + '  | ' + vMSE.toFixed(6) +
       '  | ' + (res.act1 * 100).toFixed(1).padStart(5) +
       ' | ' + (res.act2 * 100).toFixed(1).padStart(5) + ' | ' + state.lr.toFixed(8) + ' | ' + secs);
     // gentle cosine-ish decay in the last third
     if (e > (2 * opts.epochs) / 3) state.lr = Math.max(opts.lr * 0.1, state.lr * 0.9);
+  }
+
+  if (bestSnap) {
+    restoreNet(n, bestSnap);
+    log('');
+    log('best-checkpoint: epoch ' + bestEpoch + ' restored before export ' +
+      '(float val MSE ' + bestVal.toFixed(6) + ' vs final epoch ' + lastVal.toFixed(6) + ')');
   }
 
   const preNorm = floatMSE(n, positions, valIdx);
@@ -887,10 +936,15 @@ function main() {
       bytes: wrote.bytes, checksum: '0x' + wrote.checksum.toString(16).padStart(8, '0'),
     },
     training: { epochs: opts.epochs, batch: opts.batch, lr: opts.lr, seed: opts.seed, l2: state.l2,
-      w1mult: opts.w1mult, w2mult: opts.w2mult, w3mult: opts.w3mult },
+      w1mult: opts.w1mult, w2mult: opts.w2mult, w3mult: opts.w3mult,
+      bestCheckpointEpoch: bestEpoch,
+      bestCheckpointValMSEFloat: bestVal,
+      finalEpochValMSEFloat: lastVal,
+      exportSelection: 'float validation MSE (epoch with lowest val MSE)' },
     metrics: {
       trainMSEFloatLastEpoch: trainMSE,
       valMSEFloat: finalFloat,
+      valMSEFloatAtLastEpoch: lastVal,
       valMSEQuantized: finalQ,
       trainMSEQuantized: trainQ,
       baselineValMSE: baseMSE,

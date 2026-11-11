@@ -107,6 +107,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
-            gh release create "$GITHUB_REF_NAME" --title "FroostRook 1 Beta" \
+            gh release create "$GITHUB_REF_NAME" --title "FroostRook 1.0.3 Beta" \
               --notes "Portable Windows x64 build (generic x86-64, no CPU-specific instructions). Import FroostRook.exe directly into any UCI GUI. The full ZIP adds the Node front-end, opening book, learned prediction model, PGN analysis tool, test suite and the experimental FRNN1 NNUE module (not used by the playing engine). Source code archives are attached automatically and as a source ZIP. See README.md, docs/UCI.md, docs/NNUE.md and docs/TESTING.md for options, measured results and the full test report."
           gh release upload "$GITHUB_REF_NAME" native/FroostRook.exe dist/*-full.zip dist/*-source.zip --clobber

@@ -1,8 +1,8 @@
-# FroostRook 1 Beta
+# FroostRook 1.0.3 Beta
 
-<img src="assets/engine-icon.png" alt="FroostRook 1 Beta" width="200" align="right">
+<img src="assets/engine-icon.png" alt="FroostRook 1.0.3 Beta" width="200" align="right">
 
-FroostRook 1 Beta is a from-scratch chess engine: a C++17 search core with a
+FroostRook 1.0.3 Beta is a from-scratch chess engine: a C++17 search core with a
 handcrafted evaluator, a Node.js front-end, an embedded opening repertoire, a
 human-move predictor and a PGN analysis tool. It plays the standard game,
 speaks UCI, and ships as a single static Windows executable.
@@ -10,9 +10,9 @@ speaks UCI, and ships as a single static Windows executable.
 This is the repository formerly named `ziyyhhk/kiwa-engine`. GitHub redirects
 the old URL and keeps the history, tags and releases.
 
-> **Name and version:** the public engine name is exactly **FroostRook 1 Beta**
-> (capital F, R and B). `1.0.2-beta` is the package version used in archives.
-> The UCI handshake returns `id name FroostRook 1 Beta`.
+> **Name and version:** the public engine name is exactly **FroostRook 1.0.3 Beta**
+> (capital F, R and B). `1.0.3-beta` is the package version used in archives.
+> The UCI handshake returns `id name FroostRook 1.0.3 Beta`.
 
 ## Contents
 
@@ -53,6 +53,54 @@ node uci.js                 # UCI session through the front-end
 node play.js                # play in the terminal
 node analyze.js --pgn game.pgn --depth 12
 ```
+
+## What changed in 1.0.3 Beta
+
+- **Multithreading fixed.** `Threads` now runs Lazy SMP over one shared
+  transposition table instead of independent searches over private table
+  slices. At depth 14 on this machine a 2-thread search finishes in ~2.1x the
+  wall time of one thread (~5.0x at 4 threads), and all helper output is
+  suppressed so `bestmove` always comes from thread 0. UCI output, MultiPV
+  and book handling are unchanged. The match evidence below shows **no
+  playing-strength gain and no loss** (48.1%, −13 ±39): multithreading is a
+  correctness and scaling fix, not an Elo feature.
+- **Race-free transposition table.** Entries are now 16 bytes (full 64-bit
+  key + packed 8-byte payload) with a documented release/acquire
+  publish protocol: writers store the payload before the key, readers load
+  the key before the payload, and each field is at most 8 bytes and naturally
+  aligned, so concurrent searchers can never splice two positions'
+  move/score/depth/flag together. Replacement prefers fresh entries, with a
+  depth-gated variant behind `-DKIWA_TT_DEPTH_PREF`.
+- **Mate-distance pruning** in the main search (a loss worse than a mate in
+  ply is scored as such and cut immediately). Zero-cost in ordinary play;
+  exact `perft` counts are unchanged.
+- **Tactical screening:** WAC at 100,000 nodes solves **250/300** (versus
+  248/300 for 1.0.2-beta). Experiments that lost tactics were rejected and
+  are not enabled: improving-based reverse futility (−6 WAC), history-based
+  LMR reduction (+8.3% nodes, no gain), razoring (−29 WAC), singular
+  extensions (+0), late-move pruning (+1). All remain behind build switches
+  and default to off.
+- **NNUE prototype retrained** with best-checkpoint export (validation-optimal
+  epoch 17 instead of the overfit final epoch): validation MSE 0.213855 vs
+  0.214711 before, sign accuracy 59.86% vs 59.36%, parity selftest 192/192.
+  It is **still not integrated** and still weaker than a two-parameter
+  material baseline on validation (MSE 0.2044). The trainer now also reads a
+  larger `games.txt` corpus via `--dataset` (built by `tools/nnue/dataset.js`).
+- **Build hygiene:** `native/build.bat` default is the portable generic
+  x86-64 build (`-march=x86-64 -mtune=generic`); `build.bat native` keeps the
+  machine-specific build for local use. Windows executable metadata is now
+  1.0.3.0 (it was stale at 1.0.1.0 in 1.0.2-beta). CI builds the portable
+  binary only.
+- **Clock-speed sanity check:** at depth 12 the 1.0.3 search visits ~660k
+  nodes (versus 573,342 for 1.0.2-beta) at parity NPS on this laptop; the
+  deeper tree is the price of the always-overwrite/keeping policy and was
+  tolerated only because tactical strength did not regress. See
+  [docs/TESTING.md](docs/TESTING.md) for the full A/B record.
+- **The 1.0.3-beta engine is measured at strength parity with 1.0.2-beta**
+  in a 60 ms/move, no-book, colour-swapped, 40-paired-opening duel:
+  48.1% (+31 =15 −34, −13 ±39 1σ, n=80). The gains are correctness
+  (threading, TT race freedom), tactics at fixed node budget, and the
+  retrained prototype — not Elo, and no such claim is made.
 
 ## What changed in 1 Beta
 
@@ -118,7 +166,7 @@ FroostRook implements the standard UCI handshake and search commands, plus:
 
 | Option | Default | Range |
 | --- | --- | --- |
-| `Threads` | 1 | 1–8 (independent searches over private TT slices) |
+| `Threads` | 1 | 1–8 (Lazy SMP over a shared transposition table) |
 | `Hash` | 64 MB | 1–512 |
 | `MultiPV` | 1 | 1–8 |
 | `OwnBook` / `Book Depth` / `Book Variety` / `Book Style` | on / 24 / 100 / Balanced | see [docs/UCI.md](docs/UCI.md) |
@@ -183,6 +231,7 @@ where wall-clock time was not recorded:
 | FroostRook 1.0.0-beta | 590,750 | 630 ms (605–707) | 0.995 M | 0.938 M (0.836–0.976) |
 | FroostRook 1.0.1-beta | 567,818 | 621 ms (593–639) | 0.956 M | 0.914 M (0.889–0.958) |
 | FroostRook 1.0.2-beta | 573,342 | not recorded | 0.719 M | not recorded |
+| FroostRook 1.0.3-beta | 660,264 | not recorded | parity with 1.0.2 on the same loaded machine | not recorded |
 
 Against 2.3.0 the patch visits 16.6% fewer nodes and reaches the same depth
 11.5% sooner, while raw wall NPS is 5.7% lower. Against 1.0.0-beta it visits
@@ -221,6 +270,8 @@ for the shipped build, and is not in the release. That result is recorded in
 | **1.0.2-beta (new eval) vs KiwaChess 2.3.0, 60 ms/move, no book, 40 paired openings** | **80** | **+34 =20 −26** | **55.0%** | **+35 (−41 to +111)** |
 | Same evaluation before the rook-cache fix, three runs (30+30+40 pairs) | 200 | +93 =35 −72 | 55.3% | +37 (−12 to +85) |
 | For comparison: 1.0.1-beta release vs KiwaChess 2.3.0, same 60 ms fixture | 60 | +21 =14 −25 | 46.7% | −23 (−111 to +65) |
+| **1.0.3-beta vs the shipped 1.0.2-beta binary, 60 ms/move, no book, 40 colour-swapped pairs** | **80** | **+31 =15 −34** | **48.1%** | **−13 (−89 to +63)** |
+| **1.0.3-beta vs Stockfish `UCI_Elo 2200`, 100 ms/move, book on, 20 paired openings** | **40** | **+21 =4 −15** | **57.5%** | **performance 2253 (2145–2361)** |
 
 The 1.0.2-beta evaluation was measured in four runs against the same 2.3.0
 binary and fixture: the corrected build scored 44/80, and three earlier runs
@@ -263,9 +314,9 @@ engine; reaching 3000 requires an integrated NNUE and far more testing.
 
 WAC (300 positions), each build run separately on the same hardware:
 
-| Budget | KiwaChess 2.3.0 | 1.0.0-beta | 1.0.1-beta | 1.0.2-beta |
-| --- | --- | --- | --- | --- |
-| 100,000 nodes/move | 223/300 | 238/300 | 248/300 | 248/300 |
+| Budget | KiwaChess 2.3.0 | 1.0.0-beta | 1.0.1-beta | 1.0.2-beta | 1.0.3-beta |
+| --- | --- | --- | --- | --- | --- |
+| 100,000 nodes/move | 223/300 | 238/300 | 248/300 | 248/300 | 250/300 |
 | 100 ms/move (median of 3) | 236/300 | 234/300 | 241/300 | not measured |
 
 WAC rewards tactics and is not a playing-strength rating; it is reported
@@ -286,17 +337,19 @@ stronger evidence.
 | FroostRook 1.0.0-beta | 2209 (2101–2317) | 51.3% (40 games, 100 ms) | +9 (−99 to +116) |
 | FroostRook 1.0.1-beta | 2180 (2117–2243) | 46.7% (60 games, 60 ms) | −23 (−111 to +65) |
 | FroostRook 1.0.2-beta | not measured | 55.0% (80 games, 60 ms) | +35 (−41 to +111) |
+| FroostRook 1.0.3-beta | 2253 (2145–2361), 40 games, 100 ms, book on | 48.1% vs 1.0.2-beta (80 games, 60 ms) | n/a vs 2.3.0 |
 
-Stockfish matches used 100 ms/move with the book on: 40 games for 2.3.0 and
-1.0.0, 120 for 1.0.1. The 2.3.0 matches used no book; 1.0.0 played at
-100 ms/move, while 1.0.1 and 1.0.2 played at 60 ms/move, so the 1.0.0 row is
-not directly comparable to the other two. The four 1.0.2 evaluation runs
-together are 55.2% over 280 games (+36, 95% CI −6 to +78). 1.0.2 has **no
-Stockfish anchor**: applying its +58 Elo common-opponent swing to 1.0.1's
-2180 would imply roughly 2238, but that is an extrapolation, not a
-measurement. The direct 1.0.1-vs-1.0.2 match has not been run; the +58 figure
-assumes transitivity through 2.3.0. No comparable Elo measurement exists in
-this report for Kiwa 2.0.1 or 2.2.0.
+Stockfish matches used 100 ms/move with the book on: 40 games for 2.3.0,
+1.0.0 and 1.0.3-beta; 120 for 1.0.1. The 2.3.0 matches used no book; 1.0.0,
+1.0.2 and 1.0.3 played at 100 ms/move against the anchor, while the
+1.0.1-vs-1.0.2 rows used 60 ms, so the 1.0.1 rows are not directly comparable
+to the others. The four 1.0.2 evaluation runs together are 55.2% over 280
+games (+36, 95% CI −6 to +78). 1.0.3-beta anchors at 2253 (2145–2361),
+in line with the previous releases' 2180–2261 band; the 1.0.1-vs-1.0.2
+transitive estimate of ~2238 sits comfortably inside its interval. The direct
+1.0.1-vs-1.0.2 match has not been run; the +58 figure assumes transitivity
+through 2.3.0. No comparable Elo measurement exists in this report for Kiwa
+2.0.1 or 2.2.0.
 
 ## NNUE prototype (experimental)
 
@@ -307,16 +360,19 @@ this report for Kiwa 2.0.1 or 2.2.0.
   comparisons and 0 mismatches;
 - trained on 876 public Lichess games (55,824 plies, CC0), split **by game**
   into 717 train / 159 validation games to prevent leakage;
-- quantized inference reproduces the float net closely (val MSE 0.214706 vs
-  0.214711) and the file is 51,556 bytes with a checksum;
-- native benchmark: 5.2 µs per full refresh and 2.3 µs per incremental
-  evaluation in the latest run (194k / 432k evaluations/s, single-threaded on
-  this laptop; timings vary substantially with machine load).
+- the trainer now exports the validation-optimal checkpoint (epoch 17)
+  instead of the overfit final epoch: val MSE 0.213855 (vs 0.214711
+  previous), sign accuracy 59.86%;
+- quantized inference reproduces the float net closely (both 0.213855) and
+  the file is 51,556 bytes with a checksum;
+- native benchmark: parity selftest 192/192 in the latest run,
+  ~156k evaluations/s full refresh and ~320k incremental (single pass,
+  loaded laptop; timings vary substantially with machine load).
 
 It is **not integrated into the playing engine**. On validation it beats a
-constant predictor (MSE 0.2147 vs 0.2234, sign accuracy 59.4%) but is **worse
+constant predictor (MSE 0.2139 vs 0.2234) but remains **worse
 than a two-parameter material baseline (MSE 0.2044)**, and sanity checks fail:
-a synthetic queen-up position evaluates near +12 cp. It learns a tempo/opening
+a synthetic queen-up position evaluates near +11 cp. It learns a tempo/opening
 bias, not material. That is a prototype of the training and quantization path,
 not a usable evaluator, and the release does not pretend otherwise. Full
 details and reproduction commands are in [docs/NNUE.md](docs/NNUE.md).
@@ -328,12 +384,13 @@ See [docs/BUILD.md](docs/BUILD.md). Short version (Windows, MSYS2 UCRT64 GCC):
 ```
 cd native
 windres app.rc -O coff -o app.o
-g++ -O3 -std=c++17 -static -o FroostRook.exe kiwa.cpp app.o
+g++ -O3 -march=x86-64 -mtune=generic -std=c++17 -static -o FroostRook.exe kiwa.cpp app.o
 ```
 
 `native/build.bat` does the same and leaves a legacy `kiwa-native.exe` copy for
-scripts written before the rename. `-march=native` builds are faster but are
-not portable; do not publish them as the generic release asset.
+scripts written before the rename. `build.bat native` uses `-march=native` for
+a faster local binary; it may crash on older CPUs and is never the release
+asset.
 
 The Node front-end has no npm dependencies. `native.js` looks for
 `FroostRook.exe` (environment overrides `FROOSTROOK_NATIVE`, then legacy
@@ -374,8 +431,20 @@ The CI workflow builds the portable binary and runs the same set on
 - **Raw NPS is about 5.7% lower than 2.3.0** on the depth-12 bench, while
   time-to-depth is 11.5% better. The older 0.47 M figure cannot be reproduced
   with the current bench.
-- **Threads > 1 is often slower** on a 2-core laptop. The design runs
-  independent searches with private TT slices; it is not a shared-TT Lazy SMP.
+- **No measured strength gain from 1.0.3-beta.** The 60 ms/move, no-book,
+  colour-swapped duel against the shipped 1.0.2-beta binary scored 48.1%
+  (+31 =15 −34, −13 ±39 1σ, n=80) — statistical parity. The release adds
+  correct multithreading (Lazy SMP), a race-free transposition table,
+  mate-distance pruning, an NNUE retrain and packaging changes; it does not
+  add Elo, and no such claim is made. Searching at fixed node budget is
+  modestly better on WAC (250/300 vs 248/300) at the cost of ~15% more nodes
+  at depth 12.
+- **Threads > 1 uses Lazy SMP** over a shared transposition table with a
+  per-helper move-order perturbation; it is the standard, unsynchronized
+  design. It scales walls-clock time at machine-width but gives no guarantee
+  of additional strength at bullet time. On this 2-core laptop, depth-14
+  searches finish in ~2.1x (2 threads) and ~5.0x (4 threads) the wall time of
+  a 1-thread search.
 - **Bullet-time evidence only.** Every match here is 60–100 ms/move. Strength
   ordering can change at longer time controls.
 - **The analyzer's labels are engine-relative**, not tablebase truth.

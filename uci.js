@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * UCI front-end for FroostRook 1 Beta.
+ * UCI front-end for FroostRook 1.0.3 Beta.
  * Usage: node uci.js
  *
  * Extra commands (not standard UCI):
@@ -251,7 +251,7 @@ rl.on('line', line => {
 
   switch (cmd) {
     case 'uci':
-      process.stdout.write('id name FroostRook 1 Beta\n');
+      process.stdout.write('id name FroostRook 1.0.3 Beta\n');
       process.stdout.write('id author ziyyhhk\n');
       process.stdout.write(`id string core ${native.available() ? 'C++ native' : 'JavaScript (fallback)'}\n`);
       process.stdout.write('option name Threads type spin default 1 min 1 max 8\n');

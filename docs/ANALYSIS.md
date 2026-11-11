@@ -252,7 +252,7 @@ prints PASS/FAIL lines, prints a summary, and exits non-zero on any failure.
 
 ## Performance and limitations
 
-Measured with the FroostRook 1 Beta native core on this Windows 10 machine:
+Measured with the FroostRook native core on this Windows 10 machine:
 
 - depth-12 start-position search: 0.668–0.694 s, 590,750 nodes (seven-run
   bench, idle machine; see [TESTING.md](TESTING.md));

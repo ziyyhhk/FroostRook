@@ -1,4 +1,4 @@
-# FroostRook 1 Beta — test and measurement report
+# FroostRook 1.0.3 Beta — test and measurement report
 
 This is the full record behind the numbers in `README.md`. It covers what was
 tested, how, on what hardware, and what the results do **not** prove. Every
@@ -9,15 +9,16 @@ No Elo, speed or accuracy figure is estimated or extrapolated.
 - Addendum 2026-11-04: section 10 covers the evaluation rework released as
   1.0.2-beta, measured 2026-11-03 on the same hardware. The release hash below
   still describes the previously shipped 1.0.1-beta engine.
+- Addendum 2026-11-11: section 11 covers the search and tooling rework
+  released as 1.0.3-beta, measured 2026-11-11 on the same hardware.
 - Hardware: Intel Core i3-5005U (2 physical cores, 4 logical threads, 2.0 GHz),
   Windows 10 Home Single Language 10.0.19045, 8 GB RAM.
-- Toolchain: MSYS2 UCRT64 g++ 16.2.0 (`-O3 -std=c++17 -static`), Node.js
+- Toolchain: MSYS2 UCRT64 g++ 16.2.0 (`-O3 -march=x86-64 -mtune=generic -std=c++17 -static`), Node.js
   v24.21.0.
-- Engine under test: `FroostRook.exe` built with the same generic x86-64
-  command CI uses (`-O3 -std=c++17 -static`, no `-march=native`). Measurement
-  binary 4,633,795 bytes, SHA-256
-  `e98d46ad12785e7230cdcb490e5a4ad34db2d156c3e8b7a07500a2cbb85b3a6a`;
-  UCI id `FroostRook 1 Beta`. A rebuild with the same source and flags is not
+- Engine under test: `FroostRook.exe` built with the same portable x86-64
+  command CI uses (section 11 measurements), 6,338,907 bytes, SHA-256
+  `ef547975442a552af0f0c641e54324e463646729b037dc235b90467b8d452cf8`;
+  UCI id `FroostRook 1.0.3 Beta`. A rebuild with the same source and flags is not
   byte-identical because the resource/linker timestamps change, so the
   CI-built asset's hash can differ.
 - Baselines: `fr1-release.exe`, the published `v1.0.0-beta` asset, SHA-256
@@ -56,7 +57,7 @@ special-move fixture.
 UCI checklist (run manually on the release binary):
 
 ```
-uci                  -> id name FroostRook 1 Beta, all options, uciok
+uci                  -> id name FroostRook 1.0.3 Beta, all options, uciok
 isready              -> readyok
 position startpos
 go depth 10          -> info lines, bestmove
@@ -301,7 +302,8 @@ disabled by default so both engines play the same opening pairs from move one.
   node count) without the Windows icon resource.
 - One opponent setting (Stockfish 19 `UCI_Elo 2200`) plus self-play.
 - No independent third-party testing, no CCRL submission.
-- Threads > 1 are slower on this hardware.
+- Threads > 1 now helps wall time (Lazy SMP over a shared TT) but does not
+  add measured bullet-time strength on this hardware.
 - The NNUE is experimental and not integrated.
 - The icon is the approved supplied artwork with a derived transparent mask;
   see `assets/README.md`.
@@ -385,3 +387,127 @@ Honest reading: the improvement over the shipped build in the same fixture is
 direct, but +36 Elo is a point estimate whose 95% interval touches zero, the
 weights are hand-set rather than tuned, and the result is bullet chess. A
 longer time control or a tuned weight fit could change the ordering.
+
+## 11. Search and tooling rework (2026-11-11, shipped as 1.0.3-beta)
+
+This section covers the 1.0.3-beta work. The release keeps the 1.0.2-beta
+handcrafted evaluation unchanged and focuses on search infrastructure,
+measurement discipline and packaging. Nothing in it should be read as an
+Elo gain.
+
+### Changes
+
+- **Multithreading (Lazy SMP over a shared TT).** Threads > 1 now run the
+  same root search on per-thread boards with a per-helper root-move order
+  perturbation, all sharing one transposition table. The main thread reports
+  `bestmove`; helper threads never emit `info` lines. Measured on this
+  machine (depth 14 from the start position, best of 3 interleaved runs):
+  1T 23.1 s, 2T 11.1 s (2.08x), 4T 4.6 s (5.00x), 8T 5.5 s. 2T total
+  throughput 0.30 M nodes/s, 4T 0.75 M nodes/s. These are wall-time scaling
+  numbers, not playing-strength claims. `test/thread-bench.js` passes with
+  legal moves in all searches.
+- **Race-free transposition table.** One 16-byte entry per slot (full 64-bit
+  key; 64-bit packed payload holding move/score/depth/flag). Writers publish
+  the payload before the key behind a release fence; readers load the key
+  before the payload behind an acquire fence; every field is naturally
+  aligned and one 8-byte word, so a racing reader never splices two
+  positions' move/score/depth/flag. Replacement is always-overwrite (the
+  1.0.2 policy, measured equal-or-better in A/B); a depth-preferred variant
+  exists behind `-DKIWA_TT_DEPTH_PREF`. The old 18-byte array-of-vectors
+  layout and the per-thread TT slices are gone. Hash is unchanged at 64 MB
+  by default.
+- **Mate-distance pruning** in `negamax` (only at ply>0). Cuts lines that
+  can no longer beat a forced mate bound. Identical depth-12 node count;
+  included because it is theoretically sound.
+- **Improving-futility margin.** Quiet-move futility keeps the 1.0.2 rule
+  (`depth <= 3`, margin `100 + 100*depth`) and adds 60 cp when the position
+  is improving (static eval exceeds the one from two plies ago). WAC at
+  100k nodes: 250/300 with the bonus, 249 without, 248 at 1.0.2-beta.
+- **Reverted after measurement:** improving-based reverse futility (depth
+  <= 3, 80 cp improving margin) cost tactics and was reverted to the
+  1.0.2 rule; history-adjusted LMR added 8.3% nodes with zero WAC gain and
+  ships behind `KIWA_LMR_HISTORY=0`; razoring removed 29 WAC positions;
+  singular extensions added nodes with no tactical gain; late-move pruning
+  added 1 WAC position (noise) and ships off.
+- **LMR is clamped at >= 0** reduction (identical behavior to 1.0.2, which
+  never reached negative reductions).
+- **NNUE prototype retrained** with best-checkpoint export (epoch 17, val
+  MSE 0.213855 vs 0.214711). Sign accuracy 59.86%. Not integrated; still
+  below the two-parameter material baseline (0.2044). The trainer now also
+  reads `games.txt` corpora via `--dataset`; no corpus has been built for
+  this release.
+- **Packaging:** `native/build.bat` defaults to portable generic x86-64
+  (`-march=x86-64 -mtune=generic`); `build.bat native` keeps the local
+  `-march=native` build. `app.rc` is now 1.0.3.0 (it was stale at 1.0.1.0).
+  CI builds portable only. `id name FroostRook 1.0.3 Beta`.
+
+### Fixed-node results (deterministic, load-proof)
+
+| Build | Nodes @ depth 12 | WAC @ 100k nodes | NPS (loaded machine) |
+| --- | --- | --- | --- |
+| 1.0.2-beta | 573,342 | 248/300 | ~0.48-0.55 M CPU |
+| 1.0.3-beta | 660,264 | 250/300 | parity with 1.0.2 on the same machine |
+
+The 15% node increase is the cost of the tree churn from the TT rework; the
+publish fences also prevent the compiler from merging the key check with the
+payload read. NPS at the same load is unchanged (interleaved benches:
+0.48-0.55 M CPU NPS for both builds across runs). At fixed node budget
+1.0.3 solves two more WAC positions; at bullet time it is parity within
+noise (see below).
+
+### Duel vs 1.0.2-beta (the keep/reject measurement)
+
+`test/elo.js --kiwa .build/candidate-d.exe --opp .build/baseline-1.0.2.exe
+--pairs 40 --ms 60 --book false`
+(candidate-d is the depth-preferred TT build; the shipped binary differs
+only in the TT replace-policy branch and measured identically on WAC and
+within 29 nodes on bench; the duel is valid for the 1.0.3 search either
+way.)
+
+- 80 games, 12 openings, colour-swapped, 60 ms/move, no book:
+  **+31 =15 −34, 48.1%, −13 Elo (±39 1σ; 95% CI −89 to +63), n=80**.
+- As White 22.5/40 (56.3%); as Black 16/40 (40.0%) — same first-move-favored
+  split as 1.0.2-beta showed.
+- Mean reported depth 6.7 vs 6.7; 14,948 vs 14,668 nodes/move.
+- Honest read: strength parity. The 1.0.3 release does not claim an Elo
+  gain and should not be advertised with one.
+
+### Stockfish anchor (20 pairs, 100 ms/move, book on)
+
+`test/elo.js --kiwa native/FroostRook.exe --stockfish <stockfish 17.1
+AVX2> --anchor 2200 --pairs 20 --ms 100` (book on, colour-swapped):
+
+- **40 games, +21 =4 −15, 57.5%, performance 2253 vs anchor 2200
+  (±56 1σ sampling, n=40; 95% CI ≈ 2145–2361)**.
+  As White 10/20 (50.0%); as Black 13/20 (65.0%).
+- FroostRook mean depth 7.7 vs Stockfish's 20.1; 26,922 nodes/move vs
+  31,866. Mean game length 106.6 plies.
+- Honest read: consistent with the repository's earlier anchored
+  performances (2180–2261) and with 1.0.2-beta's extrapolated ~2238; this
+  is bullet chess on Stockfish's UCI_Elo scale, not a CCRL rating. Stockfish
+  itself notes the anchor's own calibration is unmeasured here.
+
+### Failures and rejections (kept, not hidden)
+
+- Improving reverse futility: fewer WAC solved at 100k nodes; reverted.
+- History-adjusted LMR: +47k nodes, +0 WAC; rejected, behind switch.
+- Razoring: −29 WAC; rejected, behind switch.
+- Singular extensions: +0 WAC; behind switch, default off.
+- Late-move pruning: +1 WAC; behind switch, default off.
+- The duel binary (candidate-d, depth-preferred TT) and the shipped
+  always-overwrite build agree on WAC (250/300) and within 29 bench
+  nodes; both are documented as the 1.0.3 search.
+- The bullet-time evidence base has not changed: every match in this
+  release is still 60-100 ms/move bullet.
+- Exit-path defect fixed: piped stdin closing while a search was in flight
+  destroyed a joinable thread and called `std::terminate`. The shutdown now
+  signals `abortFlag` and joins the search thread. (Found by manual UCI
+  session; `npm run test:all` and the UCI smoke suite pass after the fix.)
+
+### Known gaps (1.0.3 additions)
+
+- No proven strength change (see duel above).
+- Threads > 1 helps wall time, not (measured) bullet strength.
+- No Syzygy tablebase support; endgame play still relies on search and
+  handcrafted terms.
+- No integrated NNUE; the prototype remains below a material baseline.

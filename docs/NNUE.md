@@ -31,7 +31,7 @@ reproducible and auditable.
 | --- | --- |
 | `tools/nnue/pgn.js` | Self-contained PGN reader, 0x88 board, legal move generation, SAN/`UCI` replay, feature extraction, perft. Does not depend on `engine.js`. |
 | `tools/nnue/dataset.js` | Optional reproducible dataset builder: merges the in-repo CC0 exports with a deterministic filtered subset of Lichess monthly dumps and writes `data/nnue/games.txt` plus provenance. **Not used to train the shipped net**, and its output format is not yet consumed by `train.js`. |
-| `tools/nnue/train.js` | Trains the float network, normalizes activation ranges, quantizes, writes the binary, the training log, `metrics.json` and the selftest set; runs the accumulator self-check. |
+| `tools/nnue/train.js` | Trains the float network, normalizes activation ranges, exports the **validation-optimal checkpoint** (not the final epoch), quantizes, writes the binary, the training log, `metrics.json` and the selftest set; runs the accumulator self-check. `--dataset PATH` reads a `games.txt` corpus from `tools/nnue/dataset.js` instead of the in-repo games. |
 | `native/nnue.h` / `native/nnue.cpp` | Dependency-free C++17 loader, dual-perspective accumulator, incremental add/remove, fixed-point forward pass. |
 | `native/nnue_bench.cpp` | `nnue_bench <net> <positions>`: exact selftest, incremental-vs-refresh check, timing. |
 | `data/nnue/frnn1.bin` | Quantized network (51,556 bytes, checksum `0x7e7e30c7`). |
@@ -253,20 +253,23 @@ Per-epoch MSE in score space (`train.log`):
 | 11 | 0.223280 | 0.216312 | 23 | 0.205598 | 0.214595 |
 | 12 | 0.220943 | 0.215500 | 24 | 0.205045 | 0.214711 |
 
-The validation optimum is epoch 17 (0.213855); the shipped binary is the
-epoch-24 model (0.214711), i.e. it overfits slightly after the optimum. No
-best-checkpoint restore is implemented, so the final weights are exported.
+The validation optimum is epoch 17 (0.213855). **The shipped binary is the
+validation-optimal checkpoint (epoch 17)** — the best-checkpoint selection
+added to `train.js` for the 1.0.3-beta rework is what makes this possible,
+and `metrics.json` records `bestCheckpointEpoch`,
+`bestCheckpointValMSEFloat` and `finalEpochValMSEFloat` so the export choice
+is auditable.
 
 Final metrics of the shipped net:
 
 | Metric | Value |
 | --- | --- |
-| Validation MSE, float | 0.214711 |
-| Validation MSE, quantized | 0.214706 |
-| Train MSE, quantized | 0.204747 |
+| Validation MSE, float (best checkpoint, epoch 17) | 0.213855 |
+| Validation MSE, quantized | 0.213855 |
+| Train MSE, quantized (same checkpoint) | 0.210517 |
 | Baseline: constant score 0.4962 | 0.223436 |
 | Baseline: constant 0.5 | 0.223451 |
-| Validation sign accuracy (decisive positions only) | 59.36% |
+| Validation sign accuracy (decisive positions only) | 59.86% |
 | Accumulator checks / mismatches | 223,296 / 0 |
 | int16 weight clipping events | 0 |
 
@@ -280,10 +283,15 @@ refresh, plus a remove/add round trip: 55,824 × 2 × 2 = 223,296 comparisons,
 | Position | Eval |
 | --- | ---: |
 | Start position | +48 |
-| After 1.e4 (Black to move) | +59 |
-| White queen up, `4k3/8/8/8/8/8/8/3QK3 w - - 0 1` | +12 |
-| Black queen up, `3qk3/8/8/8/8/8/8/4K3 w - - 0 1` | -14 |
-| Kiwa start after 1.d4 d5 2.c4 (Black to move) | +180 |
+| After 1.e4 (Black to move) | +53 |
+| White queen up, `4k3/8/8/8/8/8/8/3QK3 w - - 0 1` | +11 |
+| Black queen up, `3qk3/8/8/8/8/8/8/4K3 w - - 0 1` | +3 |
+| Kiwa start after 1.d4 d5 2.c4 (Black to move) | +145 |
+
+The retrained net still shows **no material signal** (queen-up probes are
++11/+3 cp and, notably, the black-queen-up probe is now *positive* — a
+different sign error at a magnitude still below the opening bias). The
+retraining is a pipeline fix, not a learned evaluation upgrade.
 
 The queen-up synthetic positions are not training data; they only probe the
 learned evaluation. They show that the net learned a small opening/tempo bias
@@ -295,7 +303,7 @@ network.
 On the same validation split, a two-parameter logistic model
 `sigmoid(A + B * material)` with `P=1, N=B=3, R=5, Q=9` from the side to move,
 fit on the training positions, reaches **validation MSE 0.204351**
-(A = 0.0676, B = 0.2085 per pawn). The NNUE's 0.214706 is worse than that
+(A = 0.0676, B = 0.2085 per pawn). The retrained NNUE's 0.213855 is worse than that
 hand-made two-parameter model, despite having 25,697 parameters. This is the
 clearest quantitative statement of how weak the trained net is.
 
@@ -346,13 +354,13 @@ pass (amortized over the pass). There is no SIMD; these are plain scalar loops.
 - **The dataset is tiny**: 876 games, 35 draws, game-result-only labels. The
   effective signal is weak and noisy; most positions are materially balanced,
   and the final result is a poor per-position label.
-- The trained net reaches validation MSE 0.2147 versus 0.2234 for a constant
+- The retrained net reaches validation MSE 0.2139 versus 0.2234 for a constant
   prediction — a small improvement — but is **worse than the 2-parameter
-  material baseline (0.2044)**. It learns a tempo/opening bias (about +50 cp
-  at the start, up to +180 cp in a normal opening line) and is almost
-  material-blind (queen-up probes are ±15 cp). It is not a useful chess
-  evaluator yet.
-- The training pipeline itself is sound: features, legal move replay, split,
+  material baseline (0.2044)**. It learns a tempo/opening bias (about +48 cp
+  at the start) and is almost material-blind (queen-up probes are +11/+3 cp).
+  It is not a useful chess evaluator yet.
+- The training pipeline itself is sound and now exports the
+  validation-optimal checkpoint: features, legal move replay, split,
   quantization, C++/JS parity and the dual accumulator are all verified. The
   weak result is a modeling/data limitation, not an implementation shortcut.
 - **This evaluator is not integrated into the engine.** It is an experimental
@@ -367,20 +375,23 @@ pass (amortized over the pass). There is no SIMD; these are plain scalar loops.
   model described above, and the handcrafted evaluation remains the default
   and the only evaluator used in play.
 - Possible next steps (not done here): run `dataset.js` on enough months to
-  produce a materially larger corpus, teach `train.js` to read
-  `games.txt`, WDL/depth-aware labels, best-checkpoint selection, larger
-  H1/H2, king buckets, SIMD, and training with a small opening-book filter.
-  None of these are claimed as implemented.
+  produce a materially larger corpus, then train with
+  `node tools/nnue/train.js --dataset data/nnue/games.txt ...` (the flag is
+  wired in 1.0.3-beta; no corpus has been produced or consumed for this
+  release), WDL/depth-aware labels, king buckets, SIMD, and training with a
+  small opening-book filter. None of these are claimed as implemented.
 
 ## Reproducing
 
 ```
-# shipped net (876 in-repo games)
+# shipped net (876 in-repo games), best-checkpoint export
 node tools/nnue/train.js --epochs 24 --batch 64 --lr 0.0002 --l2 0 \
   --w1mult 5 --w2mult 0.3 --w3mult 0.3
 
-# optional larger corpus; NOT consumed by train.js yet
+# optional larger corpus: build data/nnue/games.txt, then train on it
 node tools/nnue/dataset.js --months 2013-01,2013-06 --max-dump-games 6000
+node tools/nnue/train.js --dataset data/nnue/games.txt --epochs 24 --batch 64 \
+  --lr 0.0002 --l2 0 --w1mult 5 --w2mult 0.3 --w3mult 0.3
 
 export PATH="/c/msys64/ucrt64/bin:$PATH"
 /c/msys64/ucrt64/bin/g++.exe -O3 -std=c++17 -static \
@@ -389,4 +400,9 @@ export PATH="/c/msys64/ucrt64/bin:$PATH"
 ```
 
 Training is deterministic for a fixed seed (12345) and writes
-`data/nnue/frnn1.bin`, `train.log`, `metrics.json` and `selftest.txt`.
+`data/nnue/frnn1.bin`, `train.log`, `metrics.json` and `selftest.txt`. The
+`metrics.json` records which epoch was exported (`bestCheckpointEpoch`) and
+its validation MSE; the console log prints the same line at the end of
+training. `dataset.js` is a builder only: with `--months` it downloads CC0
+Lichess dumps to an out-of-repo cache and writes a filtered `games.txt` plus
+`data/nnue/dataset.meta.json`; no corpus has been produced for this release.

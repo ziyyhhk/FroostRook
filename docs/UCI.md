@@ -1,4 +1,4 @@
-# FroostRook 1 Beta — UCI reference
+# FroostRook 1.0.3 Beta — UCI reference
 
 FroostRook speaks standard UCI. The release binary is `FroostRook.exe` (Windows
 x64, portable build). The Node front-end in the `full` package exposes the same
@@ -13,7 +13,7 @@ uci
 replies:
 
 ```
-id name FroostRook 1 Beta
+id name FroostRook 1.0.3 Beta
 id author ziyyhhk
 id string core C++ native
 ...
@@ -29,8 +29,8 @@ not cleared by `ucinewgame`.
 
 | Option | Type | Default | Range | Meaning |
 | --- | --- | --- | --- | --- |
-| `Threads` | spin | 1 | 1–8 | Worker threads. Up to 8 independent alpha-beta searches are run over private TT slices; the best completed result wins. Multi-threaded searches do not share a tree. |
-| `Hash` | spin | 64 | 1–512 | Transposition table size in MB. Divided into per-thread slices when `Threads` > 1. |
+| `Threads` | spin | 1 | 1–8 | Worker threads. Lazy SMP: every thread searches the same root with a slightly perturbed move order on its own board copy, all sharing one transposition table. `bestmove` always comes from thread 0, whose tree benefits from the helper stores. |
+| `Hash` | spin | 64 | 1–512 | Transposition table size in MB, shared by all search threads (Lazy SMP). 16 bytes per entry. |
 | `MultiPV` | spin | 1 | 1–8 | Number of root lines reported. MultiPV searches run single-threaded so the lines form one ordered list. |
 | `OwnBook` | check | true | | Use the embedded opening book for time-controlled games. |
 | `Book Depth` | spin | 24 | 0–60 | Maximum ply (from the start position) at which a book move is played. |

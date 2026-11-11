@@ -1,4 +1,4 @@
-# Building FroostRook 1 Beta
+# Building FroostRook 1.0.3 Beta
 
 ## Native engine (Windows x64)
 
@@ -8,8 +8,11 @@ it has no runtime DLL dependencies.
 ```
 cd native
 windres app.rc -O coff -o app.o
-g++ -O3 -std=c++17 -static -o FroostRook.exe kiwa.cpp app.o
+g++ -O3 -march=x86-64 -mtune=generic -std=c++17 -static -o FroostRook.exe kiwa.cpp app.o
 ```
+
+Both `windres` and `g++` must be on `PATH` (on this machine the MSYS2 UCRT64
+toolchain lives in `C:\msys64\ucrt64\bin`).
 
 `app.rc` embeds the approved icon (`assets/engine-icon.ico`) and the Windows
 version resource.

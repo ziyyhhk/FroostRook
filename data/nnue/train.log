@@ -1,5 +1,5 @@
 # FRNN1 NNUE training log
-# date: 2026-11-01T05:23:40.735Z
+# date: 2026-11-11T10:57:11.776Z
 # data: test/human-games/*.pgn  files=8 games=876 plies=55824
 # data license: CC0 1.0 (Lichess database export), see docs/NNUE.md
 # label: final game result only -> score {1,0.5,0} from side to move
@@ -8,7 +8,7 @@
 # opts: epochs=24 batch=64 lr=0.0002 seed=12345 minPly=12
 # skipped games: [["variant",85],["no-moves",23],["duplicate-game",6]]
 
-data: 8 pgn files, 876 games, 55824 plies (3137 ms to replay + featurize)
+data: 8 pgn files, 876 games, 55824 plies (1799 ms to replay + featurize)
 split: 717 train games / 159 val games; 37302 train positions / 9153 val positions (ply >= 12)
 results: 457 white wins, 384 black wins, 35 draws
 baseline (constant score 0.4962, train mean): val MSE 0.223436
@@ -17,51 +17,53 @@ init: float val MSE 0.225878
 
 epoch | train_mse | val_mse  | act1% | act2% | lr       | sec
 ------+-----------+----------+-------+-------+----------+-----
-    1 | 0.235938  | 0.223211  | 100.0 | 100.0 | 0.00020000 | 2.8
-    2 | 0.235412  | 0.222998  | 100.0 | 100.0 | 0.00020000 | 3.9
-    3 | 0.234978  | 0.222708  | 100.0 | 100.0 | 0.00020000 | 3.6
-    4 | 0.234397  | 0.222337  | 100.0 | 100.0 | 0.00020000 | 3.9
-    5 | 0.233643  | 0.221792  | 100.0 | 100.0 | 0.00020000 | 4.2
-    6 | 0.232582  | 0.221162  | 100.0 | 100.0 | 0.00020000 | 4.0
-    7 | 0.231245  | 0.220309  | 100.0 | 100.0 | 0.00020000 | 3.0
-    8 | 0.229631  | 0.219373  | 100.0 | 100.0 | 0.00020000 | 3.7
-    9 | 0.227725  | 0.218365  | 100.0 |  99.9 | 0.00020000 | 2.7
-   10 | 0.225578  | 0.217314  | 100.0 |  99.9 | 0.00020000 | 4.5
-   11 | 0.223280  | 0.216312  | 100.0 |  99.8 | 0.00020000 | 2.8
-   12 | 0.220943  | 0.215500  |  99.9 |  99.7 | 0.00020000 | 1.9
-   13 | 0.218733  | 0.214796  |  99.9 |  99.6 | 0.00020000 | 3.1
-   14 | 0.216661  | 0.214356  |  99.9 |  99.5 | 0.00020000 | 2.0
-   15 | 0.214765  | 0.214016  |  99.9 |  99.4 | 0.00020000 | 2.3
-   16 | 0.212982  | 0.213887  |  99.9 |  99.2 | 0.00020000 | 2.8
-   17 | 0.211362  | 0.213855  |  99.9 |  99.1 | 0.00020000 | 2.0
-   18 | 0.209952  | 0.213991  |  99.9 |  99.0 | 0.00018000 | 2.5
-   19 | 0.208780  | 0.214053  |  99.9 |  98.9 | 0.00016200 | 2.2
-   20 | 0.207790  | 0.214159  |  99.9 |  98.8 | 0.00014580 | 3.6
+    1 | 0.235938  | 0.223211  | 100.0 | 100.0 | 0.00020000 | 2.6
+    2 | 0.235412  | 0.222998  | 100.0 | 100.0 | 0.00020000 | 2.4
+    3 | 0.234978  | 0.222708  | 100.0 | 100.0 | 0.00020000 | 2.4
+    4 | 0.234397  | 0.222337  | 100.0 | 100.0 | 0.00020000 | 2.4
+    5 | 0.233643  | 0.221792  | 100.0 | 100.0 | 0.00020000 | 2.6
+    6 | 0.232582  | 0.221162  | 100.0 | 100.0 | 0.00020000 | 2.4
+    7 | 0.231245  | 0.220309  | 100.0 | 100.0 | 0.00020000 | 2.3
+    8 | 0.229631  | 0.219373  | 100.0 | 100.0 | 0.00020000 | 2.3
+    9 | 0.227725  | 0.218365  | 100.0 |  99.9 | 0.00020000 | 2.9
+   10 | 0.225578  | 0.217314  | 100.0 |  99.9 | 0.00020000 | 3.6
+   11 | 0.223280  | 0.216312  | 100.0 |  99.8 | 0.00020000 | 2.1
+   12 | 0.220943  | 0.215500  |  99.9 |  99.7 | 0.00020000 | 2.0
+   13 | 0.218733  | 0.214796  |  99.9 |  99.6 | 0.00020000 | 2.7
+   14 | 0.216661  | 0.214356  |  99.9 |  99.5 | 0.00020000 | 3.1
+   15 | 0.214765  | 0.214016  |  99.9 |  99.4 | 0.00020000 | 2.0
+   16 | 0.212982  | 0.213887  |  99.9 |  99.2 | 0.00020000 | 2.2
+   17 | 0.211362  | 0.213855  |  99.9 |  99.1 | 0.00020000 | 2.5
+   18 | 0.209952  | 0.213991  |  99.9 |  99.0 | 0.00018000 | 2.7
+   19 | 0.208780  | 0.214053  |  99.9 |  98.9 | 0.00016200 | 2.9
+   20 | 0.207790  | 0.214159  |  99.9 |  98.8 | 0.00014580 | 2.5
    21 | 0.206947  | 0.214303  |  99.9 |  98.8 | 0.00013122 | 2.4
-   22 | 0.206213  | 0.214451  |  99.9 |  98.7 | 0.00011810 | 3.2
-   23 | 0.205598  | 0.214595  |  99.9 |  98.6 | 0.00010629 | 1.8
-   24 | 0.205045  | 0.214711  |  99.9 |  98.7 | 0.00009566 | 3.3
+   22 | 0.206213  | 0.214451  |  99.9 |  98.7 | 0.00011810 | 2.3
+   23 | 0.205598  | 0.214595  |  99.9 |  98.6 | 0.00010629 | 3.3
+   24 | 0.205045  | 0.214711  |  99.9 |  98.7 | 0.00009566 | 3.8
 
-activation range normalization: max a1=164.3 (scale 1/1.000), max a2=200.0 (scale 1/1.076)
-float val MSE pre/post normalization: 0.214711 / 0.214711 (should match: positive homogeneity)
-final float val MSE      : 0.214711
-final quantized val MSE  : 0.214706
-final quantized train MSE: 0.204747
-val sign accuracy (decisive only): 59.36%
+best-checkpoint: epoch 17 restored before export (float val MSE 0.213855 vs final epoch 0.214711)
+
+activation range normalization: max a1=163.8 (scale 1/1.000), max a2=195.9 (scale 1/1.000)
+float val MSE pre/post normalization: 0.213855 / 0.213855 (should match: positive homogeneity)
+final float val MSE      : 0.213855
+final quantized val MSE  : 0.213855
+final quantized train MSE: 0.210517
+val sign accuracy (decisive only): 59.86%
 baseline constant val MSE: 0.223436
 quantization shifts     : w1 10, w2 14, w3 14
 quantized clipping events: 0 (int16 range overflow)
-max |q| w1/w2/w3: 22160/4176/14407
-wrote C:\Users\akira\Documents\Qoder\2026-10-29\ac8ac107\chess-engine\data\nnue\frnn1.bin (51556 bytes, checksum 0x7e7e30c7)
+max |q| w1/w2/w3: 22224/4234/12570
+wrote C:\Users\akira\Documents\Default Project\FroostRook\data\nnue\frnn1.bin (51556 bytes, checksum 0xd61488c9)
 accumulator checks: 223296 comparisons, 0 mismatches
 
 sample evals (cp, side-to-move perspective):
   startpos                       +48  [white to move]
-  after 1.e4                     +59  [black to move]
-  white queen up (synthetic)     +12  [white to move]
-  black queen up (synthetic)     -14  [white to move]
-  Kiwa start after 1.d4 d5 2.c4  +180  [black to move]
+  after 1.e4                     +53  [black to move]
+  white queen up (synthetic)     +11  [white to move]
+  black queen up (synthetic)     +3  [white to move]
+  Kiwa start after 1.d4 d5 2.c4  +145  [black to move]
 
-selftest: 192 positions from 12 validation games -> C:\Users\akira\Documents\Qoder\2026-10-29\ac8ac107\chess-engine\data\nnue\selftest.txt
-selftest example: rnb1kb1r/pp2pppp/2p2n2/3p4/3P1B2/1qP1PN2/PP3PPP/RN2KB1R w KQkq - 0 7|15
-total time: 82.5 s
+selftest: 192 positions from 12 validation games -> C:\Users\akira\Documents\Default Project\FroostRook\data\nnue\selftest.txt
+selftest example: rnb1kb1r/pp2pppp/2p2n2/3p4/3P1B2/1qP1PN2/PP3PPP/RN2KB1R w KQkq - 0 7|11
+total time: 72.0 s

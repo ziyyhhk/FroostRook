@@ -69,7 +69,7 @@ function assert(cond, msg) {
 (async () => {
   send('uci');
   await waitFor(l => l === 'uciok', 15000, 'uciok');
-  assert(lines.some(l => l.startsWith('id name FroostRook 1 Beta')), 'engine identifies itself');
+  assert(lines.some(l => l.startsWith('id name FroostRook 1.0.3 Beta')), 'engine identifies itself');
   for (const opt of ['Threads', 'Hash', 'MultiPV', 'OwnBook', 'Book Depth', 'Book Variety', 'Book Style',
                      'Opening Diversity', 'Random Seed', 'Clear Book Memory', 'Move Overhead', 'Clear Hash']) {
     assert(lines.some(l => l.startsWith(`option name ${opt} `)), `advertises ${opt}`);

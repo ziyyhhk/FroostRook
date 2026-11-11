@@ -900,6 +900,17 @@ static const int PASSED_EG[8] = { 0, 8, 12, 20, 35, 60, 100, 0 };
 #ifndef KIWA_FUTILITY
 #define KIWA_FUTILITY 1
 #endif
+// Singular-extension and late-move-pruning switches are kept so their value
+// can be re-measured with the same A/B method used for mobility/threats.
+#ifndef KIWA_SINGULAR
+#define KIWA_SINGULAR 0
+#endif
+#ifndef KIWA_LMP
+#define KIWA_LMP 0
+#endif
+#ifndef KIWA_RAZOR
+#define KIWA_RAZOR 0
+#endif
 static const int MOB_MG[7] = { 0, 0, 3, 2, 2, 1, 0 };
 static const int MOB_EG[7] = { 0, 0, 3, 2, 3, 1, 0 };
 static const int OUTPOST_N_MG = 25, OUTPOST_N_EG = 15;
@@ -1451,48 +1462,58 @@ static int evaluate() {
 // Transposition table
 // ---------------------------------------------------------------------------
 
-// 18 bytes per slot; the number of slots is rounded down to a power of two.
+// 16 bytes per entry; the number of entries is rounded down to a power of two.
+// All search threads share one table (Lazy SMP). Writers store the payload
+// BEFORE the key and readers load the key BEFORE the payload, behind release /
+// acquire fences. Every field is at most 8 bytes and naturally aligned; x86
+// (and ARM, for this ordering pattern) never make the key visible before the
+// stores that precede it, so a racing reader either misses the old key or
+// sees a consistent same-position payload — never one spliced together from
+// two positions. The full 64-bit key is stored, so collisions stay at the
+// accidental 1-in-2^64 rate.
+struct alignas(16) TTEntry {
+  u64 key;
+  // Single 64-bit payload: bits 0-31 move (internal 0x88 encoding),
+  // bits 32-47 score (int16, |value| <= 31000 + MAX_PLY), bits 48-55 depth,
+  // bits 56-63 flag (0 exact / 1 upper / 2 lower). One aligned 8-byte
+  // load/store is atomic on x86-64 and on ARM for naturally aligned words,
+  // so a racing reader gets the whole old or whole new payload, never a
+  // field-spliced mix.
+  u64 payload;
+};
+static_assert(sizeof(TTEntry) == 16, "TT entry must stay 16 bytes");
+static inline u64 packTT(uint32_t mv, int sc, int depth, int flag) {
+  return (u64)mv | ((u64)(uint16_t)(int16_t)sc << 32) |
+         ((u64)(uint8_t)depth << 48) | ((u64)(uint8_t)flag << 56);
+}
+static inline void unpackTT(u64 p, uint32_t& mv, int& sc, int& depth, int& flag) {
+  mv = (uint32_t)(p & 0xffffffffu);
+  sc = (int)(int16_t)((p >> 32) & 0xffffu);
+  depth = (int)((p >> 48) & 0xffu);
+  flag = (int)((p >> 56) & 0xffu);
+}
 static size_t ttSize = 0;
 static size_t ttMask = 0;
 static int hashMB = 64;
 static int multiPvOption = 1;
-// Each search thread gets a private slice of the shared table, so no locks
-// and no data races. -1 means "use the whole table".
-static thread_local size_t ttOffset = 0;
-static thread_local size_t ttSegMask = (size_t)-1;
-static inline size_t ttIdx(u64 k) {
-  const size_t m = ttSegMask == (size_t)-1 ? ttMask : ttSegMask;
-  return ttOffset + (size_t)(k & m);
-}
-static vector<u64> ttKey;
-static vector<uint32_t> ttMoveArr;
-static vector<int32_t> ttScore;
-static vector<int8_t> ttDepth;
-static vector<int8_t> ttFlag;
+static inline size_t ttIdx(u64 k) { return (size_t)(k & ttMask); }
+static vector<TTEntry> ttEntries;
 
 static void clearTT() {
   if (!ttSize) return;
-  fill(ttKey.begin(), ttKey.end(), 0);
-  fill(ttMoveArr.begin(), ttMoveArr.end(), 0);
-  fill(ttScore.begin(), ttScore.end(), 0);
-  fill(ttDepth.begin(), ttDepth.end(), 0);
-  fill(ttFlag.begin(), ttFlag.end(), 0);
+  fill(ttEntries.begin(), ttEntries.end(), TTEntry{0, 0});
 }
 
 static void resizeTT(int mb) {
   if (mb < 1) mb = 1;
   if (mb > 512) mb = 512;
   hashMB = mb;
-  size_t entries = ((size_t)mb * 1024 * 1024) / 18;
+  size_t entries = ((size_t)mb * 1024 * 1024) / sizeof(TTEntry);
   size_t n = 1024;
-  while (n * 2 <= entries && n < (1u << 24)) n *= 2;
+  while (n * 2 <= entries && n < (1u << 26)) n *= 2;
   ttSize = n;
   ttMask = n - 1;
-  ttKey.assign(n, 0);
-  ttMoveArr.assign(n, 0);
-  ttScore.assign(n, 0);
-  ttDepth.assign(n, 0);
-  ttFlag.assign(n, 0);
+  ttEntries.assign(n, TTEntry{0, 0});
 }
 
 // ---------------------------------------------------------------------------
@@ -1596,6 +1617,10 @@ static thread_local int rootBest = 0;
 static thread_local int rootScore = 0;
 static thread_local int rootDepth = 0;
 static thread_local int rootPrevBest = 0;
+// Static evaluations by ply, for the "improving" test (eval exceeds the one
+// from two plies ago). Used to widen pruning margins when the position is
+// getting better for the side to move.
+static thread_local int staticEvalStack[MAX_PLY + 2];
 
 static int LMR[64][MAX_MOVES];
 
@@ -1791,18 +1816,27 @@ static int quiesce(int alpha, int beta, int ply, bool inCheck) {
 
 static void ttStore(int depth, int score, int flag, uint32_t move, int ply) {
   const size_t idx = ttIdx(key);
-  if (ttKey[idx] == key && ttDepth[idx] > depth + 2 && ttFlag[idx] == 0) return;
-  ttKey[idx] = key;
-  ttMoveArr[idx] = move;
-  ttDepth[idx] = (int8_t)depth;
-  ttFlag[idx] = (int8_t)flag;
   int sc = score;
   if (sc > MATE - 1000) sc += ply;
   else if (sc < -MATE + 1000) sc -= ply;
-  ttScore[idx] = sc;
+  TTEntry& e = ttEntries[idx];
+  const int curDepth = (int)((e.payload >> 48) & 0xffu);
+  // Always-overwrite replacement (Newest entry wins the slot), preferred by
+  // A/B measurement on this engine; a different-position deep entry is kept
+  // only under the legacy depth-gated rule when KIWA_TT_DEPTH_PREF is set.
+#ifdef KIWA_TT_DEPTH_PREF
+  if (e.key != key && curDepth > depth + 2) return;
+#else
+  if (e.key == key && curDepth > depth + 2 && ((e.payload >> 56) & 0xffu) == 0) return;
+#endif
+  // Payload is published before the key; the aligned 8-byte store is atomic
+  // and x86/ARM keep it visible before the key store that follows.
+  e.payload = packTT(move, sc, depth, flag);
+  atomic_thread_fence(memory_order_release);
+  e.key = key;
 }
 
-static int negamax(int depth, int alpha, int beta, int ply, bool canNull) {
+static int negamax(int depth, int alpha, int beta, int ply, bool canNull, uint32_t excludedMove = 0) {
   nodes++;
   if ((nodes & 1023) == 0 && timeUp()) searchStop = true;
   if (searchStop) return 0;
@@ -1812,21 +1846,37 @@ static int negamax(int depth, int alpha, int beta, int ply, bool canNull) {
   if (ply > 0) {
     if (halfmove >= 100) return 0;
     if (isRepetition() || insufficientMaterial()) return 0;
+    // Mate-distance pruning: no mate found deeper than the current bounds
+    // can improve on them, and a loss worse than a known mate scores like one.
+#ifndef KIWA_NO_MATEPRUNE
+    if (alpha < -MATE + ply) alpha = -MATE + ply;
+    if (beta > MATE - ply) beta = MATE - ply;
+    if (alpha >= beta) return alpha;
+#endif
   }
   if (ply >= MAX_PLY - 1) return evaluate();
 
   uint32_t ttMove = 0;
-  const size_t idx = ttIdx(key);
-  if (ttKey[idx] == key) {
-    ttMove = ttMoveArr[idx];
-    if (ttDepth[idx] >= depth) {
-      int sc = ttScore[idx];
-      if (sc > MATE - 1000) sc -= ply;
-      else if (sc < -MATE + 1000) sc += ply;
-      const int fl = ttFlag[idx];
-      if (fl == 0) return sc;
-      if (fl == 1 && sc <= alpha) return sc;
-      if (fl == 2 && sc >= beta) return sc;
+  int ttDepthOp = -1, ttScoreOp = 0;
+  uint8_t ttFlagOp = 0;
+  {
+    const size_t idx = ttIdx(key);
+    if (ttEntries[idx].key == key) {
+      atomic_thread_fence(memory_order_acquire);
+      uint32_t pm = 0; int ps = 0, pdepth = 0, pflag = 0;
+      unpackTT(ttEntries[idx].payload, pm, ps, pdepth, pflag);
+      ttMove = pm;
+      ttDepthOp = pdepth;
+      ttScoreOp = ps;
+      ttFlagOp = (uint8_t)pflag;
+      if (ttDepthOp >= depth) {
+        int sc = ttScoreOp;
+        if (sc > MATE - 1000) sc -= ply;
+        else if (sc < -MATE + 1000) sc += ply;
+        if (ttFlagOp == 0) return sc;
+        if (ttFlagOp == 1 && sc <= alpha) return sc;
+        if (ttFlagOp == 2 && sc >= beta) return sc;
+      }
     }
   }
 
@@ -1836,9 +1886,44 @@ static int negamax(int depth, int alpha, int beta, int ply, bool canNull) {
   // IIR deliberately absent: A/B tests showed it lost tactics without a
   // node-count win, so the reduced re-search is not worth it.
   const int staticEval = inCheck ? -INF : evaluate();
+  staticEvalStack[ply] = staticEval;
+  const bool improving = excludedMove == 0 && !inCheck && ply >= 2 &&
+                         staticEvalStack[ply - 2] != -INF && staticEval > staticEvalStack[ply - 2];
 
-  if (!inCheck && depth <= 2 && staticEval - 120 * depth >= beta) return staticEval;
+  // Singular extension: when the TT move fails high against a reduced
+  // null-window search of every other move, nothing else comes close, so
+  // search it one ply deeper. Only when a TT move exists with enough depth.
+#if KIWA_SINGULAR
+  int singularExt = 0;
+  if (excludedMove == 0 && ply > 0 && depth >= 8 && ttMove != 0 && !inCheck &&
+      ttDepthOp >= depth - 3 && (ttFlagOp == 0 || ttFlagOp == 2)) {
+    int sBeta = ttScoreOp;
+    if (sBeta > MATE - 1000) sBeta -= ply;
+    else if (sBeta < -MATE + 1000) sBeta += ply;
+    sBeta -= (25 + 3 * depth);
+    if (sBeta < -MATE + ply) sBeta = -MATE + ply;
+    const int sScore = negamax((depth - 1) / 2, sBeta - 1, sBeta, ply, false, ttMove);
+    if (sScore < sBeta) singularExt = 1;
+  }
+#endif
 
+  // Reverse futility pruning: a node whose static eval beats beta by a wide
+  // margin is a fail-high even before searching.
+  if (excludedMove == 0 && !inCheck && depth <= 2 && staticEval - 120 * depth >= beta) return staticEval;
+#if KIWA_RAZOR
+  // Razoring: when statically hopeless, drop into qsearch; a fail-low return
+  // there confirms the node is lost, so prune the rest of the search.
+  if (excludedMove == 0 && !inCheck && depth <= 3 && staticEval != -INF &&
+      staticEval + 150 + 150 * depth < alpha) {
+    const int sc = quiesce(alpha, beta, ply, false);
+    if (sc <= alpha) return sc;
+  }
+#endif
+
+  // Null move is tried wherever it can fail high against the current beta.
+  // In pure-PV full windows beta is infinite so the test costs one shallow
+  // subtree and can never cut; against a finite aspiration beta at a PV
+  // child it is the cheap fail-high signal the root re-search relies on.
   if (canNull && !inCheck && depth >= 3 && staticEval >= beta && hasNonPawn(side)) {
     const int R = 2 + (depth > 6 ? 1 : 0);
     makeNull();
@@ -1863,6 +1948,7 @@ static int negamax(int depth, int alpha, int beta, int ply, bool canNull) {
 
   for (int i = 0; i < n; i++) {
     const uint32_t mv = pickMove(base, n, i);
+    if (excludedMove != 0 && mv == excludedMove) continue;
     const int flags = mv & (F_CAP | F_EP | F_CASTLE | F_DOUBLE);
     const int promo = (mv >> 14) & 7;
     const int us = side;
@@ -1872,16 +1958,28 @@ static int negamax(int depth, int alpha, int beta, int ply, bool canNull) {
     legal++;
     moveStack[ply] = mv;
 
+    const int lmrFrom = mv & 127, lmrTo = (mv >> 7) & 127;
+    const int lmrHi = us * 16384 + lmrFrom * 128 + lmrTo;
+
     const bool givesCheck = attacked(kingSq[side], side ^ 1);
-#if KIWA_FUTILITY
     // Futility pruning of quiet moves. Checks, captures and promotions are
     // never pruned, and the first legal move is always searched; only the
     // recursive call is saved. KIWA_FUTILITY=0 measures what it costs.
-    if (!inCheck && legal > 1 && !(flags & F_CAP) && !promo && !givesCheck) {
-      if (depth <= 3 && staticEval != -INF && staticEval + 100 + 100 * depth <= alpha) {
-        unmakeMove(mv);
-        continue;
+#if KIWA_FUTILITY
+    if (excludedMove == 0 && !inCheck && legal > 1 && !(flags & F_CAP) && !promo && !givesCheck) {
+      if (depth <= 3 && staticEval != -INF) {
+        const int fut = 100 + 100 * depth + (improving ? 60 : 0);
+        if (staticEval + fut <= alpha) { unmakeMove(mv); continue; }
       }
+    }
+#endif
+#if KIWA_LMP
+    // Late-move pruning: beyond a move-count limit, quiet moves that can
+    // neither raise alpha nor cut are skipped at low depth. Improving nodes
+    // keep more candidates; captures were always exempt.
+    if (excludedMove == 0 && !inCheck && depth <= 4 && legal > 1 && !(flags & F_CAP) && !promo && !givesCheck) {
+      const int lmpLimit = improving ? (3 + depth * depth) : (2 + depth);
+      if (legal > lmpLimit) { unmakeMove(mv); continue; }
     }
 #endif
     if (!(flags & F_CAP) && !promo && nQuiet < 64) {
@@ -1889,8 +1987,13 @@ static int negamax(int depth, int alpha, int beta, int ply, bool canNull) {
     }
 
     // Check extension: forced replies are cheap to resolve, so keep the depth.
+    // Singular extension (when enabled) deepens only the TT move, after the
+    // verification search proved no sibling comes close.
     int newDepth = depth - 1;
     if (givesCheck && depth >= 2 && depth <= 6 && ply < 40) newDepth++;
+#if KIWA_SINGULAR
+    if (mv == ttMove) newDepth += singularExt;
+#endif
     int sc;
 
     if (legal == 1) {
@@ -1900,11 +2003,20 @@ static int negamax(int depth, int alpha, int beta, int ply, bool canNull) {
       if (depth >= 3 && legal >= 4 && !promo && !inCheck && !givesCheck) {
         if (!(flags & F_CAP)) {
           reduction = LMR[depth][legal];
+#ifdef KIWA_LMR_HISTORY
+          // Trust history: search moves that have scored well closer to full
+          // depth, and barely-tried or losing-history moves shallower.
+          const int hs = history[lmrHi];
+          if (hs >= 4096) reduction -= 1;
+          if (hs >= 16384) reduction -= 1;
+          if (hs < -4096) reduction += 1;
+#endif
         } else if (see(mv) < 0) {
           // A losing capture is not worth full depth unless it refutes.
           reduction = LMR[depth][legal];
         }
         if (reduction > newDepth - 1) reduction = newDepth - 1;
+        if (reduction < 0) reduction = 0;
       }
       sc = -negamax(newDepth - reduction, -alpha - 1, -alpha, ply + 1, true);
       if (sc > alpha && reduction > 0) {
@@ -1923,12 +2035,14 @@ static int negamax(int depth, int alpha, int beta, int ply, bool canNull) {
       bestMove = mv;
       if (sc > alpha) {
         alpha = sc;
-        pvTable[ply * MAX_PLY + ply] = (int)mv;
-        int j = ply + 1;
-        for (; j < pvLength[ply + 1]; j++) {
-          pvTable[ply * MAX_PLY + j] = pvTable[(ply + 1) * MAX_PLY + j];
+        if (excludedMove == 0) {
+          pvTable[ply * MAX_PLY + ply] = (int)mv;
+          int j = ply + 1;
+          for (; j < pvLength[ply + 1]; j++) {
+            pvTable[ply * MAX_PLY + j] = pvTable[(ply + 1) * MAX_PLY + j];
+          }
+          pvLength[ply] = j;
         }
-        pvLength[ply] = j;
 
         if (sc >= beta) {
           if (!(flags & F_CAP) && !promo) {
@@ -1950,7 +2064,7 @@ static int negamax(int depth, int alpha, int beta, int ply, bool canNull) {
             h -= depth * depth;
             if (h < -(1 << 20)) h = -(1 << 20);
           }
-          ttStore(depth, sc, 2, mv, ply);
+          if (excludedMove == 0) ttStore(depth, sc, 2, mv, ply);
           return sc;
         }
       }
@@ -1959,7 +2073,7 @@ static int negamax(int depth, int alpha, int beta, int ply, bool canNull) {
 
   if (legal == 0) return inCheck ? -MATE + ply : 0;
 
-  ttStore(depth, bestScore, bestScore > oldAlpha ? 0 : 1, bestMove, ply);
+  if (excludedMove == 0) ttStore(depth, bestScore, bestScore > oldAlpha ? 0 : 1, bestMove, ply);
   return bestScore;
 }
 
@@ -2743,7 +2857,7 @@ int main(int argc, char** argv) {
     if (cmd.empty()) continue;
 
     if (cmd == "uci") {
-      emitInfo("id name FroostRook 1 Beta");
+      emitInfo("id name FroostRook 1.0.3 Beta");
       emitInfo("id author ziyyhhk");
       emitInfo("id string core C++ native");
       emitInfo("option name Threads type spin default 1 min 1 max 8");
@@ -2889,8 +3003,6 @@ int main(int argc, char** argv) {
       searchThread = thread([o, fen, moves, nthreads]() {
         if (nthreads <= 1) {
           threadId = 0;
-          ttOffset = 0;
-          ttSegMask = (size_t)-1;
           prepareThreadPosition(fen, moves);
           SearchResult r = search(o);
           lock_guard<mutex> lock(outMutex);
@@ -2899,50 +3011,27 @@ int main(int argc, char** argv) {
           return;
         }
 
-        // Split the advertised Hash into private, power-of-two slices.
-        size_t seg = 1024;
-        while (seg * 2 * (size_t)nthreads <= ttSize) seg *= 2;
-
+        // Lazy SMP: every thread searches the same root on its own board
+        // copy, all sharing one transposition table. Helpers perturb only
+        // the root move order (so they diverge enough to add nodes) and
+        // feed the shared table; the reported bestmove always comes from
+        // thread 0, whose tree benefits from the helpers' stores. Helper
+        // threads report no info lines (threadId == 0 gate in search()).
         vector<SearchResult> results((size_t)nthreads);
         vector<thread> pool;
         pool.reserve((size_t)nthreads);
         for (int i = 0; i < nthreads; i++) {
           pool.emplace_back([&, i]() {
             threadId = i;
-            ttOffset = (size_t)i * seg;
-            ttSegMask = seg - 1;
             prepareThreadPosition(fen, moves);
             results[(size_t)i] = search(o);
           });
         }
         for (auto& t : pool) t.join();
 
-        auto mateState = [](int sc) {
-          return sc > MATE - 100 ? 1 : (sc < -MATE + 100 ? -1 : 0);
-        };
-        int bi = 0;
-        for (int i = 1; i < nthreads; i++) {
-          const SearchResult& r = results[(size_t)i];
-          const SearchResult& b = results[(size_t)bi];
-          const int ms = mateState(r.score), bs = mateState(b.score);
-          bool better;
-          if (ms != bs) better = ms > bs;
-          else if (r.depth != b.depth) better = r.depth > b.depth;
-          else if (r.score != b.score) better = r.score > b.score;
-          else better = r.nodes > b.nodes;
-          if (better) bi = i;
-        }
-        const SearchResult& best = results[(size_t)bi];
+        const SearchResult& best = results[0];
 
         lock_guard<mutex> lock(outMutex);
-        if (bi != 0) {
-          ostringstream info;
-          info << "info depth " << best.depth << " score " << scoreToUci(best.score)
-               << " nodes " << best.nodes << " time " << best.time << " pv";
-          if (best.pv.empty()) info << " " << best.bestMoveStr;
-          else for (auto& m : best.pv) info << " " << m;
-          printf("%s\n", info.str().c_str());
-        }
         printf("bestmove %s\n", best.bestMoveStr.c_str());
         fflush(stdout);
       });
@@ -3010,5 +3099,10 @@ int main(int argc, char** argv) {
       emitInfo(s.str());
     }
   }
+  // stdin closed (EOF): stop any in-flight search before exiting. Without
+  // this, returning from main() destroys a joinable search thread, and the
+  // std::thread destructor calls std::terminate.
+  abortFlag.store(true);
+  if (searchThread.joinable()) searchThread.join();
   return 0;
 }
