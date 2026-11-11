@@ -357,7 +357,7 @@ async function playGame(kiwa, sf, opening, kiwaIsWhite, gameNo) {
 }
 
 // Filled in after the handshake so the PGN names the real engines.
-const NAMES = { kiwa: 'FroostRook 1.0.3 Beta', opp: 'Opponent' };
+const NAMES = { kiwa: 'FroostRook 1.1.0 Beta', opp: 'Opponent' };
 
 function movesToPgn(game, openingName) {
   const list = game.sanMoves || game.moves;

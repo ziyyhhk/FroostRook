@@ -28,6 +28,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
+#include <fstream>
 #include "book_data.h"
 
 using namespace std;
@@ -878,8 +879,8 @@ static inline void unmakeNull() {
 
 static thread_local int wpFiles[8];
 static thread_local int bpFiles[8];
-static const int PASSED_MG[8] = { 0, 8, 12, 20, 35, 60, 100, 0 };
-static const int PASSED_EG[8] = { 0, 8, 12, 20, 35, 60, 100, 0 };
+static int PASSED_MG[8] = { 0, 8, 12, 20, 35, 60, 100, 0 };  // ranks 3-6 synced from TUNE
+static int PASSED_EG[8] = { 0, 8, 12, 20, 35, 60, 100, 0 };  // ranks 3-6 synced from TUNE
 
 // Mobility per safe destination square, indexed by piece type. A destination
 // occupied by the enemy counts, but squares covered by an enemy pawn do not.
@@ -900,6 +901,118 @@ static const int PASSED_EG[8] = { 0, 8, 12, 20, 35, 60, 100, 0 };
 #ifndef KIWA_FUTILITY
 #define KIWA_FUTILITY 1
 #endif
+
+// Texel-tunable evaluation parameters. The defaults are exactly the values
+// the 1.0.3-beta engine shipped with; a hidden `tunebench` command (see the
+// UCI command section) coordinate-descends them against a dataset of
+// Stockfish-labelled positions and prints the result. The shipped engine
+// never mutates TUNE[] at startup; syncTuneArrays() applies TUNE[] to the
+// mutable eval arrays once at init and after every tuner pass.
+enum TuneParam {
+  P_MOB_N_MG, P_MOB_B_MG, P_MOB_R_MG, P_MOB_Q_MG,
+  P_MOB_N_EG, P_MOB_B_EG, P_MOB_R_EG, P_MOB_Q_EG,
+  P_OUT_N_MG, P_OUT_N_EG, P_OUT_B_MG, P_OUT_B_EG,
+  P_PAWN_N, P_PAWN_B, P_PAWN_R, P_PAWN_Q,
+  P_LOOSE_N, P_LOOSE_B, P_LOOSE_R, P_LOOSE_Q,
+  P_PASS_MG3, P_PASS_MG4, P_PASS_MG5, P_PASS_MG6,
+  P_PASS_EG3, P_PASS_EG4, P_PASS_EG5, P_PASS_EG6,
+  P_ROOK_PASS_MG, P_ROOK_PASS_EG,
+  P_DOUBLED_MG, P_DOUBLED_EG,
+  P_ISOLATED_MG, P_ISOLATED_EG,
+  P_CONN_MG, P_CONN_EG,
+  P_BACK_MG, P_BACK_EG,
+  P_BISHOP_PAIR_MG, P_BISHOP_PAIR_EG,
+  P_BADB_MG, P_BADB_EG,
+  P_ROOK_OPEN_MG, P_ROOK_OPEN_EG,
+  P_ROOK_SEMI_MG, P_ROOK_SEMI_EG,
+  P_ROOK_7TH_MG, P_ROOK_7TH_EG,
+  P_ROOK_CONN_MG, P_ROOK_CONN_EG,
+  P_PASS_KD,
+  P_KD_CAP, P_OPEN_MG, P_SEMI_MG,
+  P_SHIELD_PAWN, P_SHIELD_PAWN2, P_SHIELD_HOLE,
+  P_TEMPO,
+  P_ATTACK_KNIGHT, P_ATTACK_ROOK, P_ATTACK_QUEEN,
+  TUNE_PARAM_COUNT
+};
+static int TUNE[TUNE_PARAM_COUNT] = {
+  3, 2, 2, 1,               // P_MOB_*_MG (knight bishop rook queen)
+  3, 2, 3, 1,               // P_MOB_*_EG
+  25, 15, 15, 10,           // P_OUT_*
+  45, 40, 30, 15,           // P_PAWN_*
+  30, 30, 25, 20,           // P_LOOSE_*
+  20, 35, 60, 100,          // P_PASS_MG ranks 3..6
+  20, 35, 60, 100,          // P_PASS_EG ranks 3..6
+  18, 12,                   // P_ROOK_PASS_*
+  12, 12,                   // P_DOUBLED_*
+  14, 14,                   // P_ISOLATED_*
+  4, 2,                     // P_CONN_*
+  6, 8,                     // P_BACK_*
+  30, 30,                   // P_BISHOP_PAIR_*
+  3, 2,                     // P_BADB_*
+  18, 18,                   // P_ROOK_OPEN_*
+  8, 8,                     // P_ROOK_SEMI_*
+  14, 14,                   // P_ROOK_7TH_*
+  12, 8,                    // P_ROOK_CONN_*
+  2,                        // P_PASS_KD (passed-pawn king-distance multiplier)
+  40, 20, 12,               // P_KD_CAP, P_OPEN_MG, P_SEMI_MG
+  8, 4, 10,                 // P_SHIELD_PAWN, P_SHIELD_PAWN2, P_SHIELD_HOLE
+  8,                        // P_TEMPO
+  2, 3, 5,                  // P_ATTACK_KNIGHT, P_ATTACK_ROOK, P_ATTACK_QUEEN
+};
+static const char* TUNE_NAMES[TUNE_PARAM_COUNT] = {
+  "P_MOB_N_MG", "P_MOB_B_MG", "P_MOB_R_MG", "P_MOB_Q_MG",
+  "P_MOB_N_EG", "P_MOB_B_EG", "P_MOB_R_EG", "P_MOB_Q_EG",
+  "P_OUT_N_MG", "P_OUT_N_EG", "P_OUT_B_MG", "P_OUT_B_EG",
+  "P_PAWN_N", "P_PAWN_B", "P_PAWN_R", "P_PAWN_Q",
+  "P_LOOSE_N", "P_LOOSE_B", "P_LOOSE_R", "P_LOOSE_Q",
+  "P_PASS_MG3", "P_PASS_MG4", "P_PASS_MG5", "P_PASS_MG6",
+  "P_PASS_EG3", "P_PASS_EG4", "P_PASS_EG5", "P_PASS_EG6",
+  "P_ROOK_PASS_MG", "P_ROOK_PASS_EG",
+  "P_DOUBLED_MG", "P_DOUBLED_EG",
+  "P_ISOLATED_MG", "P_ISOLATED_EG",
+  "P_CONN_MG", "P_CONN_EG",
+  "P_BACK_MG", "P_BACK_EG",
+  "P_BISHOP_PAIR_MG", "P_BISHOP_PAIR_EG",
+  "P_BADB_MG", "P_BADB_EG",
+  "P_ROOK_OPEN_MG", "P_ROOK_OPEN_EG",
+  "P_ROOK_SEMI_MG", "P_ROOK_SEMI_EG",
+  "P_ROOK_7TH_MG", "P_ROOK_7TH_EG",
+  "P_ROOK_CONN_MG", "P_ROOK_CONN_EG",
+  "P_PASS_KD",
+  "P_KD_CAP", "P_OPEN_MG", "P_SEMI_MG",
+  "P_SHIELD_PAWN", "P_SHIELD_PAWN2", "P_SHIELD_HOLE",
+  "P_TEMPO",
+  "P_ATTACK_KNIGHT", "P_ATTACK_ROOK", "P_ATTACK_QUEEN",
+};
+static thread_local bool texelTuning = false;
+// Shipped defaults; the tuner clamps every parameter to within +/-50% of these
+// to stop the optimizer chasing noise on sparse features into absurd values.
+static const int TUNE_DEFAULT[TUNE_PARAM_COUNT] = {
+  3, 2, 2, 1,
+  3, 2, 3, 1,
+  25, 15, 15, 10,
+  45, 40, 30, 15,
+  30, 30, 25, 20,
+  20, 35, 60, 100,
+  20, 35, 60, 100,
+  18, 12,
+  12, 12,
+  14, 14,
+  4, 2,
+  6, 8,
+  30, 30,
+  3, 2,
+  18, 18,
+  8, 8,
+  14, 14,
+  12, 8,
+  2,
+  40, 20, 12,
+  8, 4, 10,
+  8,
+  2, 3, 5,
+
+};
 // Singular-extension and late-move-pruning switches are kept so their value
 // can be re-measured with the same A/B method used for mobility/threats.
 #ifndef KIWA_SINGULAR
@@ -911,21 +1024,40 @@ static const int PASSED_EG[8] = { 0, 8, 12, 20, 35, 60, 100, 0 };
 #ifndef KIWA_RAZOR
 #define KIWA_RAZOR 0
 #endif
-static const int MOB_MG[7] = { 0, 0, 3, 2, 2, 1, 0 };
-static const int MOB_EG[7] = { 0, 0, 3, 2, 3, 1, 0 };
+static int MOB_MG[7] = { 0, 0, 3, 2, 2, 1, 0 };  // synced from TUNE
+static int MOB_EG[7] = { 0, 0, 3, 2, 3, 1, 0 };  // synced from TUNE
 static const int OUTPOST_N_MG = 25, OUTPOST_N_EG = 15;
 static const int OUTPOST_B_MG = 15, OUTPOST_B_EG = 10;
 // A piece attacked by an enemy pawn, or attacked while undefended, is a
 // liability a shallow search often misses. Knights and bishops are hit hardest
 // because losing one for a pawn decides most club-level games. The two
 // penalties stack: a loose knight on a pawn-attacked square loses both.
-static const int THREAT_PAWN[7] = { 0, 0, 45, 40, 30, 15, 0 };
-static const int THREAT_LOOSE[7] = { 0, 0, 30, 30, 25, 20, 0 };
+static int THREAT_PAWN[7] = { 0, 0, 45, 40, 30, 15, 0 };  // synced from TUNE
+static int THREAT_LOOSE[7] = { 0, 0, 30, 30, 25, 20, 0 };  // synced from TUNE
 // Attack-map weight per piece type (pawn, knight, bishop, rook, queen, king).
-static const int ATTACK_WEIGHT[7] = { 0, 1, 2, 2, 3, 5, 1 };
+static int ATTACK_WEIGHT[7] = { 0, 1, 2, 2, 3, 5, 1 };  // synced from TUNE
 static const int ROOK_PASSER_MG = 18, ROOK_PASSER_EG = 12;
 static const int KING_DANGER_CAP = 40;
 static const int KING_OPEN_FILE_MG = 20, KING_HALF_OPEN_FILE_MG = 12;
+
+// Push the current TUNE[] values into the mutable eval arrays. Called once
+// at startup (identity update) and by the tuner after each accepted move.
+static void syncTuneArrays() {
+  MOB_MG[KNIGHT] = TUNE[P_MOB_N_MG]; MOB_MG[BISHOP] = TUNE[P_MOB_B_MG];
+  MOB_MG[ROOK] = TUNE[P_MOB_R_MG]; MOB_MG[QUEEN] = TUNE[P_MOB_Q_MG];
+  MOB_EG[KNIGHT] = TUNE[P_MOB_N_EG]; MOB_EG[BISHOP] = TUNE[P_MOB_B_EG];
+  MOB_EG[ROOK] = TUNE[P_MOB_R_EG]; MOB_EG[QUEEN] = TUNE[P_MOB_Q_EG];
+  PASSED_MG[3] = TUNE[P_PASS_MG3]; PASSED_MG[4] = TUNE[P_PASS_MG4];
+  PASSED_MG[5] = TUNE[P_PASS_MG5]; PASSED_MG[6] = TUNE[P_PASS_MG6];
+  PASSED_EG[3] = TUNE[P_PASS_EG3]; PASSED_EG[4] = TUNE[P_PASS_EG4];
+  PASSED_EG[5] = TUNE[P_PASS_EG5]; PASSED_EG[6] = TUNE[P_PASS_EG6];
+  THREAT_PAWN[KNIGHT] = TUNE[P_PAWN_N]; THREAT_PAWN[BISHOP] = TUNE[P_PAWN_B];
+  THREAT_PAWN[ROOK] = TUNE[P_PAWN_R]; THREAT_PAWN[QUEEN] = TUNE[P_PAWN_Q];
+  THREAT_LOOSE[KNIGHT] = TUNE[P_LOOSE_N]; THREAT_LOOSE[BISHOP] = TUNE[P_LOOSE_B];
+  THREAT_LOOSE[ROOK] = TUNE[P_LOOSE_R]; THREAT_LOOSE[QUEEN] = TUNE[P_LOOSE_Q];
+  ATTACK_WEIGHT[KNIGHT] = TUNE[P_ATTACK_KNIGHT]; ATTACK_WEIGHT[BISHOP] = TUNE[P_ATTACK_KNIGHT];
+  ATTACK_WEIGHT[ROOK] = TUNE[P_ATTACK_ROOK]; ATTACK_WEIGHT[QUEEN] = TUNE[P_ATTACK_QUEEN];
+}
 
 // Pawn attack maps. They depend only on the pawn placement, so they are
 // rebuilt only when the pawn key changes, not on every full-extras miss.
@@ -1105,20 +1237,20 @@ static void extrasRaw() {
 
       // Doubled / isolated
       for (int f = 0; f < 8; f++) {
-        if (wpFiles[f] > 1) { xmg -= 12 * (wpFiles[f] - 1); xeg -= 12 * (wpFiles[f] - 1); }
-        if (bpFiles[f] > 1) { xmg += 12 * (bpFiles[f] - 1); xeg += 12 * (bpFiles[f] - 1); }
+        if (wpFiles[f] > 1) { xmg -= TUNE[P_DOUBLED_MG] * (wpFiles[f] - 1); xeg -= TUNE[P_DOUBLED_EG] * (wpFiles[f] - 1); }
+        if (bpFiles[f] > 1) { xmg += TUNE[P_DOUBLED_MG] * (bpFiles[f] - 1); xeg += TUNE[P_DOUBLED_EG] * (bpFiles[f] - 1); }
       }
       for (int i = 0; i < wpc; i++) {
         const int f = pieceSq[wpBase + i] & 7;
         const int left = f > 0 ? wpFiles[f - 1] : 0;
         const int right = f < 7 ? wpFiles[f + 1] : 0;
-        if (!left && !right) { xmg -= 14; xeg -= 14; }
+        if (!left && !right) { xmg -= TUNE[P_ISOLATED_MG]; xeg -= TUNE[P_ISOLATED_EG]; }
       }
       for (int i = 0; i < bpc; i++) {
         const int f = pieceSq[bpBase + i] & 7;
         const int left = f > 0 ? bpFiles[f - 1] : 0;
         const int right = f < 7 ? bpFiles[f + 1] : 0;
-        if (!left && !right) { xmg += 14; xeg += 14; }
+        if (!left && !right) { xmg += TUNE[P_ISOLATED_MG]; xeg += TUNE[P_ISOLATED_EG]; }
       }
 
       // Connected pawns (defended or phalanx), never on an isolated pawn.
@@ -1140,7 +1272,7 @@ static void extrasRaw() {
             const int side = sq + df;
             if (validSq(side) && board[side] == own) connected = true;
           }
-          if (connected) { xmg += sign * 4; xeg += sign * 2; }
+          if (connected) { xmg += sign * TUNE[P_CONN_MG]; xeg += sign * TUNE[P_CONN_EG]; }
 
           // Backward: no pawn able to defend it, yet an adjacent-file pawn
           // exists (so isolated pawns are not counted twice), and its stop
@@ -1157,7 +1289,7 @@ static void extrasRaw() {
             }
             if (!defended && anyAdj) {
               const int stop = sq + (c == WHITE ? 16 : -16);
-              if (validSq(stop) && enemyAtk[stop]) { xmg -= sign * 6; xeg -= sign * 8; }
+              if (validSq(stop) && enemyAtk[stop]) { xmg -= sign * TUNE[P_BACK_MG]; xeg -= sign * TUNE[P_BACK_EG]; }
             }
           }
         }
@@ -1217,7 +1349,7 @@ static void extrasRaw() {
       for (int j = 0; j < pieceCount[ri]; j++) {
         const int rs = pieceSq[ri * 16 + j];
         if ((rs & 7) == f && (c == WHITE ? (rs >> 4) < r : (rs >> 4) > r)) {
-          xmg += sign * ROOK_PASSER_MG; xeg += sign * ROOK_PASSER_EG;
+          xmg += sign * TUNE[P_ROOK_PASS_MG]; xeg += sign * TUNE[P_ROOK_PASS_EG];
           break;
         }
       }
@@ -1243,7 +1375,7 @@ static void extrasRaw() {
       if (!passed) continue;
       const int promo = c == WHITE ? ((sq & 7) | 0x70) : (sq & 7);
       const int d = chebDist(kingSq[c ^ 1], promo);
-      xeg += sign * (7 - d) * 2;
+      xeg += sign * (7 - d) * TUNE[P_PASS_KD];
     }
   }
 
@@ -1280,15 +1412,15 @@ static void extrasRaw() {
         const bool rankOk = c == WHITE ? (r >= 3 && r <= 5) : (r >= 2 && r <= 4);
         if (!rankOk || !ownAtk[sq] || enemyAtk[sq]) continue;
         if (enemyPawnCanReach(sq, c)) continue;
-        if (t == KNIGHT) { xmg += sign * OUTPOST_N_MG; xeg += sign * OUTPOST_N_EG; }
-        else { xmg += sign * OUTPOST_B_MG; xeg += sign * OUTPOST_B_EG; }
+        if (t == KNIGHT) { xmg += sign * TUNE[P_OUT_N_MG]; xeg += sign * TUNE[P_OUT_N_EG]; }
+        else { xmg += sign * TUNE[P_OUT_B_MG]; xeg += sign * TUNE[P_OUT_B_EG]; }
       }
     }
   }
 
   // Bishop pair
-  if (pieceCount[0 * 6 + BISHOP - 1] >= 2) { xmg += 30; xeg += 30; }
-  if (pieceCount[1 * 6 + BISHOP - 1] >= 2) { xmg -= 30; xeg -= 30; }
+  if (pieceCount[0 * 6 + BISHOP - 1] >= 2) { xmg += TUNE[P_BISHOP_PAIR_MG]; xeg += TUNE[P_BISHOP_PAIR_EG]; }
+  if (pieceCount[1 * 6 + BISHOP - 1] >= 2) { xmg -= TUNE[P_BISHOP_PAIR_MG]; xeg -= TUNE[P_BISHOP_PAIR_EG]; }
 
   // Bad bishop: own pawns on the bishop's colour restrict it.
   for (int c = 0; c < 2; c++) {
@@ -1303,7 +1435,7 @@ static void extrasRaw() {
         if ((((ps >> 4) + (ps & 7)) & 1) == bc) bad++;
       }
       if (bad > 6) bad = 6;
-      xmg -= sign * 3 * bad; xeg -= sign * 2 * bad;
+      xmg -= sign * TUNE[P_BADB_MG] * bad; xeg -= sign * TUNE[P_BADB_EG] * bad;
     }
   }
 
@@ -1317,10 +1449,10 @@ static void extrasRaw() {
       const int f = rsq & 7;
       const int own = c == WHITE ? wpFiles[f] : bpFiles[f];
       const int opp = c == WHITE ? bpFiles[f] : wpFiles[f];
-      if (!own && !opp) { xmg += sign * 18; xeg += sign * 18; }
-      else if (!own) { xmg += sign * 8; xeg += sign * 8; }
+      if (!own && !opp) { xmg += sign * TUNE[P_ROOK_OPEN_MG]; xeg += sign * TUNE[P_ROOK_OPEN_EG]; }
+      else if (!own) { xmg += sign * TUNE[P_ROOK_SEMI_MG]; xeg += sign * TUNE[P_ROOK_SEMI_EG]; }
       const int r = rsq >> 4;
-      if ((c == WHITE && r == 6) || (c == BLACK && r == 1)) { xmg += sign * 14; xeg += sign * 14; }
+      if ((c == WHITE && r == 6) || (c == BLACK && r == 1)) { xmg += sign * TUNE[P_ROOK_7TH_MG]; xeg += sign * TUNE[P_ROOK_7TH_EG]; }
     }
     for (int i = 0; i < cnt; i++) {
       for (int j = i + 1; j < cnt; j++) {
@@ -1331,7 +1463,7 @@ static void extrasRaw() {
         for (int sq = a + step; sq != b; sq += step) {
           if (board[sq]) { clear = false; break; }
         }
-        if (clear) { xmg += sign * 12; xeg += sign * 8; }
+        if (clear) { xmg += sign * TUNE[P_ROOK_CONN_MG]; xeg += sign * TUNE[P_ROOK_CONN_EG]; }
       }
     }
   }
@@ -1347,11 +1479,11 @@ static void extrasRaw() {
         const int f = (ksq & 7) + df;
         if (f < 0 || f > 7) continue;
         const int s1 = ksq + d + df;
-        if (validSq(s1) && board[s1] == pc(c, PAWN)) shield += 8;
+        if (validSq(s1) && board[s1] == pc(c, PAWN)) shield += TUNE[P_SHIELD_PAWN];
         else {
           const int s2 = s1 + d;
-          if (validSq(s2) && board[s2] == pc(c, PAWN)) shield += 4;
-          else shield -= 10;
+          if (validSq(s2) && board[s2] == pc(c, PAWN)) shield += TUNE[P_SHIELD_PAWN2];
+          else shield -= TUNE[P_SHIELD_HOLE];
         }
       }
       xmg += sign * shield;
@@ -1401,7 +1533,7 @@ static void extrasRaw() {
         const int s = ksq + RING[d];
         if (validSq(s)) danger += enemy[s];
       }
-      if (danger > KING_DANGER_CAP) danger = KING_DANGER_CAP;
+      if (danger > TUNE[P_KD_CAP]) danger = TUNE[P_KD_CAP];
       xmg -= sign * (danger * danger / 8);
 
       const int kf = ksq & 7;
@@ -1410,7 +1542,7 @@ static void extrasRaw() {
         if (f < 0 || f > 7) continue;
         const int own = c == WHITE ? wpFiles[f] : bpFiles[f];
         const int opp = c == WHITE ? bpFiles[f] : wpFiles[f];
-        if (!own) xmg -= sign * (opp ? KING_HALF_OPEN_FILE_MG : KING_OPEN_FILE_MG);
+        if (!own) xmg -= sign * (opp ? TUNE[P_SEMI_MG] : TUNE[P_OPEN_MG]);
       }
     }
   }
@@ -1421,6 +1553,9 @@ static void extrasRaw() {
 
 static void extras() {
   exCalls++;
+  // The whole-position cache is keyed by position only, not by the tunable
+  // parameter vector; bypass it while coordinate-descending.
+  if (texelTuning) { extrasRaw(); return; }
   const size_t base = (size_t)(key & EX_MASK) & ~(size_t)1;
   if (exKey[base] == key) {
     extraMg = exScoreMg[base]; extraEg = exScoreEg[base];
@@ -1455,7 +1590,7 @@ static int evaluate() {
   extras();
   s += (extraMg * p + extraEg * (24 - p)) / 24;
 #endif
-  return (side == WHITE ? s : -s) + 8;
+  return (side == WHITE ? s : -s) + TUNE[P_TEMPO];
 }
 
 // ---------------------------------------------------------------------------
@@ -1608,10 +1743,14 @@ static int parseBookStyle(const string& v) {
   return BOOK_BALANCED;
 }
 
-static thread_local u64 nodeLimit = 0;
-static thread_local i64 hardStop = INT64_MAX;
-static thread_local i64 softStop = INT64_MAX;
-static thread_local i64 moveAlloc = 0;
+// Process-wide search limits. They were thread_local while the search ran
+// one thread per invocation; ponderhit converts an ongoing ponder search
+// to normal clock limits from the main thread, so these are shared. All
+// writes use relaxed atomics; the search reads them in its time check.
+static atomic<u64> nodeLimit(0);
+static atomic<i64> hardStop(INT64_MAX);
+static atomic<i64> softStop(INT64_MAX);
+static atomic<i64> moveAlloc(0);
 
 static thread_local int rootBest = 0;
 static thread_local int rootScore = 0;
@@ -1645,7 +1784,9 @@ static i64 cpuMs() {
 }
 
 static inline bool timeUp() {
-  return abortFlag.load(memory_order_relaxed) || nowMs() >= hardStop || (nodeLimit && nodes >= nodeLimit);
+  return abortFlag.load(memory_order_relaxed) ||
+         (i64)nowMs() >= hardStop.load(memory_order_relaxed) ||
+         (nodeLimit.load(memory_order_relaxed) != 0 && nodes >= nodeLimit.load(memory_order_relaxed));
 }
 
 static bool hasNonPawn(int c) {
@@ -2217,6 +2358,7 @@ struct SearchOpts {
   u64 nodeBudget = 0;
   int multiPv = 1;
   bool infinite = false;
+  bool ponder = false;
 };
 
 struct SearchResult {
@@ -2229,6 +2371,14 @@ struct SearchResult {
   vector<string> pv;
 };
 
+// Ponder state: while a ponder search is running, ponderActive is true and
+// ponderOpts carries the clock arguments from the `go ponder` command. On
+// `ponderhit` the limits are recomputed for a normal search on the current
+// position instead of restarting it, so the work spent pondering is not
+// thrown away.
+static bool ponderActive = false;
+static SearchOpts ponderOpts;
+
 static mutex outMutex;
 
 static void emitInfo(const string& line) {
@@ -2237,39 +2387,47 @@ static void emitInfo(const string& line) {
   fflush(stdout);
 }
 
-static SearchResult search(const SearchOpts& rawOpts) {
-  SearchOpts opts = rawOpts;
-  const i64 started = nowMs();
-  const int maxDepth = min(opts.depth ? opts.depth : MAX_PLY - 1, MAX_PLY - 2);
-
-  i64 hard = INT64_MAX, soft = INT64_MAX;
-  moveAlloc = 0;
+// Shared clock budget calculation for both a normal `go` and the `ponderhit`
+// conversion. moveAlloc is set to the per-move allocation by the caller.
+static void clockBudget(const SearchOpts& opts, i64 started, i64& hard, i64& soft, i64& alloc) {
   if (opts.movetime) {
     hard = started + opts.movetime;
     soft = hard;
-  } else if (opts.wtime >= 0) {
+    // Soft-stop heuristic deliberately not applied to movetime-limited
+    // searches: the budget is too small to stop safely on a stable PV,
+    // and stopping early costs more than the saved milliseconds.
+    alloc = 0;
+    return;
+  }
+  if (opts.wtime >= 0) {
     const i64 t = side == WHITE ? opts.wtime : opts.btime;
     const i64 inc = side == WHITE ? opts.winc : opts.binc;
     const i64 usable = max((i64)10, t - moveOverhead);
     const i64 mtg = opts.movestogo > 0 ? opts.movestogo : 50;
     const i64 reserve = min((i64)150, max((i64)30, usable / 50));
     const i64 budget = max((i64)10, usable - reserve);
-    i64 alloc = (i64)floor((double)usable / (double)mtg + (double)inc * 0.6);
+    alloc = (i64)floor((double)usable / (double)mtg + (double)inc * 0.6);
     alloc = min(alloc, usable / 2);
     alloc = max((i64)10, min(alloc, budget));
-    moveAlloc = alloc;
     soft = started + alloc;
     hard = started + min(budget, (i64)floor(alloc * 1.5));
-  } else if (opts.infinite) {
-    hard = started + 20000;
-    soft = hard;
-  } else if (opts.depth) {
-    hard = INT64_MAX;
-    soft = INT64_MAX;
-  } else {
-    hard = started + 1000;
-    soft = hard;
+    return;
   }
+  if (opts.infinite || opts.ponder) { hard = started + 20000; soft = hard; alloc = 0; return; }
+  if (opts.depth) { hard = INT64_MAX; soft = INT64_MAX; alloc = 0; return; }
+  hard = started + 1000;
+  soft = hard;
+  alloc = 1000;
+}
+
+static SearchResult search(const SearchOpts& rawOpts) {
+  SearchOpts opts = rawOpts;
+  const i64 started = nowMs();
+  const int maxDepth = min(opts.depth ? opts.depth : MAX_PLY - 1, MAX_PLY - 2);
+
+  i64 hard = INT64_MAX, soft = INT64_MAX, allocLocal = 0;
+  clockBudget(opts, started, hard, soft, allocLocal);
+  moveAlloc.store(allocLocal, memory_order_relaxed);
 
   hardStop = hard;
   softStop = soft;
@@ -2803,8 +2961,129 @@ static const char* START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQ
 static string gameFen = START_FEN;
 static vector<string> gameMoves;
 
+// ---------------------------------------------------------------------------
+// Texel tuning (hidden diagnostic, not part of the UCI surface)
+// ---------------------------------------------------------------------------
+
+// One dataset sample: FEN string + Stockfish cp from the side to move.
+struct TexelSample {
+  string fen;
+  int cp;
+};
+
+static double texelSigmoid(double x) { return 1.0 / (1.0 + exp(-x)); }
+
+static double texelLoss(const vector<TexelSample>& data, const vector<int>& idx) {
+  double s = 0.0;
+  for (const int i : idx) {
+    setFen(data[(size_t)i].fen);
+    const int ev = evaluate();
+    const double d = texelSigmoid(ev / 400.0) - texelSigmoid(data[(size_t)i].cp / 400.0);
+    s += d * d;
+  }
+  return s / (double)idx.size();
+}
+
+static void runTexelBench(const string& file, int maxEpochs, int subsetSize) {
+  ifstream in(file);
+  if (!in) { emitInfo("info string tunebench: cannot open " + file); return; }
+  vector<TexelSample> data;
+  string line;
+  while (getline(in, line)) {
+    const size_t tab = line.find('\t');
+    if (tab == string::npos) continue;
+    TexelSample s;
+    s.fen = line.substr(0, tab);
+    s.cp = atoi(line.c_str() + tab + 1);
+    data.push_back(std::move(s));
+  }
+  if (data.empty()) { emitInfo("info string tunebench: no samples"); return; }
+
+  // 90/10 split: tune on the train view, report on validation.
+  vector<int> trainIdx, valIdx;
+  for (size_t i = 0; i < data.size(); i++) {
+    if (i % 10 == 9) valIdx.push_back((int)i); else trainIdx.push_back((int)i);
+  }
+  // Sub-sample the training view for the per-parameter sweeps.
+  if ((int)trainIdx.size() > subsetSize) {
+    mt19937_64 rng(20240517);
+    std::vector<int> pick(trainIdx.begin(), trainIdx.end());
+    std::shuffle(pick.begin(), pick.end(), rng);
+    pick.resize((size_t)subsetSize);
+    trainIdx.swap(pick);
+  }
+
+  texelTuning = true;
+  const i64 t0 = nowMs();
+  double best = texelLoss(data, trainIdx);
+  double valBest = texelLoss(data, valIdx);
+  ostringstream hdr;
+  hdr << "info string tunebench: " << data.size() << " samples, train "
+      << trainIdx.size() << " val " << valIdx.size()
+      << " loss " << best << " val " << valBest;
+  emitInfo(hdr.str());
+
+  int step = 4;  // global step; halved when a full pass no longer improves
+  int epoch = 0;
+  while (epoch < maxEpochs) {
+    bool improved = false;
+    for (int p = 0; p < TUNE_PARAM_COUNT; p++) {
+      const int base = TUNE[p];
+      const int stepFor = max(1, min(12, abs(base) / 5 + 1)) * step / 4 + 1;
+      const int limLo = TUNE_DEFAULT[p] - max(3, (int)(abs(TUNE_DEFAULT[p]) / 2));
+      const int limHi = TUNE_DEFAULT[p] + max(3, (int)(abs(TUNE_DEFAULT[p]) / 2));
+      for (int dir = -1; dir <= 1; dir += 2) {
+        const int candidate = base + dir * stepFor;
+        if (candidate < limLo || candidate > limHi) continue;
+        TUNE[p] = candidate;
+        syncTuneArrays();
+        const double l = texelLoss(data, trainIdx);
+        if (l < best) {
+          best = l;
+          improved = true;
+          ostringstream msg;
+          msg << "info string tunebench epoch " << epoch << " " << TUNE_NAMES[p]
+              << " " << base << " -> " << TUNE[p] << " loss " << best;
+          emitInfo(msg.str());
+          goto param_done;
+        }
+      }
+      TUNE[p] = base;
+      syncTuneArrays();
+  param_done:
+      (void)0;
+    }
+    if (!improved) {
+      if (step <= 1) break;
+      step = max(1, step / 2);
+      ostringstream msg;
+      msg << "info string tunebench: no improvement, step now " << step;
+      emitInfo(msg.str());
+    }
+    const double val = texelLoss(data, valIdx);
+    if (val < valBest) valBest = val;
+    ostringstream pass;
+    pass << "info string tunebench pass " << epoch << " loss " << best << " val " << val;
+    emitInfo(pass.str());
+    epoch++;
+  }
+  texelTuning = false;
+
+  emitInfo("info string tunebench result:");
+  for (int p = 0; p < TUNE_PARAM_COUNT; p++) {
+    ostringstream row;
+    row << "info string tune " << TUNE_NAMES[p] << " " << TUNE[p];
+    emitInfo(row.str());
+  }
+  ostringstream fin;
+  fin << "info string tunebench done epochs=" << epoch << " trainLoss " << best
+      << " valLoss " << valBest << " time " << (nowMs() - t0) << "ms";
+  emitInfo(fin.str());
+}
+
 int main(int argc, char** argv) {
   initTables();
+  syncTuneArrays();
   for (int d = 0; d < MAX_PLY; d++) {
     for (int m = 0; m < MAX_MOVES; m++) {
       if (d < 3) { LMR[d][m] = 0; continue; }
@@ -2848,6 +3127,7 @@ int main(int argc, char** argv) {
     abortFlag.store(true);
     if (searchThread.joinable()) searchThread.join();
     abortFlag.store(false);
+    ponderActive = false;
   };
 
   while (getline(cin, line)) {
@@ -2857,7 +3137,7 @@ int main(int argc, char** argv) {
     if (cmd.empty()) continue;
 
     if (cmd == "uci") {
-      emitInfo("id name FroostRook 1.0.3 Beta");
+      emitInfo("id name FroostRook 1.1.0 Beta");
       emitInfo("id author ziyyhhk");
       emitInfo("id string core C++ native");
       emitInfo("option name Threads type spin default 1 min 1 max 8");
@@ -2962,7 +3242,15 @@ int main(int argc, char** argv) {
             if (applyUciMove(mvStr)) gameMoves.push_back(mvStr);
             else fprintf(stderr, "illegal move ignored: %s\n", mvStr.c_str());
           }
-          break;
+        } else if (token == "ponder") {
+          // UCI pondering: predict the opponent's next move. The engine
+          // searches the resulting position on `go ponder`; the move is not
+          // claimed as part of the real game (repetition/undo is unaffected).
+          string mvStr;
+          if (iss >> mvStr) {
+            if (applyUciMove(mvStr)) gameMoves.push_back(mvStr);
+            else fprintf(stderr, "illegal ponder move %s ignored\n", mvStr.c_str());
+          }
         }
       }
     } else if (cmd == "go") {
@@ -2979,12 +3267,13 @@ int main(int argc, char** argv) {
         else if (token == "nodes") iss >> o.nodeBudget;
         else if (token == "movetime") iss >> o.movetime;
         else if (token == "infinite") o.infinite = true;
+        else if (token == "ponder") o.ponder = true;
       }
       // Book replies are instant. Explicit depth/node/infinite searches and
       // MultiPV are analysis requests, so the book stays out of those.
       o.multiPv = multiPvOption;
       if (ownBook && bookAllowed && !o.depth && !o.nodeBudget && !o.infinite &&
-          multiPvOption <= 1) {
+          !o.ponder && multiPvOption <= 1) {
         const uint32_t bm = bookPick();
         if (bm) {
           const string mv = moveToStr(bm);
@@ -2997,6 +3286,10 @@ int main(int argc, char** argv) {
       abortFlag.store(false);
       const string fen = gameFen;
       const vector<string> moves = gameMoves;
+      // Track ponder state for ponderhit: `go ponder` arms it, any other go
+      // (or ponderhit itself) disarms it.
+      ponderActive = o.ponder;
+      ponderOpts = o;
       // MultiPV output is a single ordered list; helper threads would emit
       // competing lines, so MultiPV runs the search on one thread.
       const int nthreads = multiPvOption > 1 ? 1 : threads;
@@ -3039,6 +3332,25 @@ int main(int argc, char** argv) {
       abortFlag.store(true);
       if (searchThread.joinable()) searchThread.join();
       abortFlag.store(false);
+      ponderActive = false;
+    } else if (cmd == "ponderhit") {
+      // The predicted move was played: stop pondering on a 20-second cap and
+      // continue the same search with the normal clock budget instead of
+      // restarting it. Search limits live in shared atomics so the search
+      // thread picks them up without being restarted.
+      if (ponderActive && searchThread.joinable()) {
+        const i64 now = nowMs();
+        i64 hard = INT64_MAX, soft = INT64_MAX, alloc = 0;
+        clockBudget(ponderOpts, now, hard, soft, alloc);
+        nodeLimit.store(ponderOpts.nodeBudget, memory_order_relaxed);
+        softStop.store(soft, memory_order_relaxed);
+        hardStop.store(hard, memory_order_relaxed);
+        moveAlloc.store(alloc, memory_order_relaxed);
+        ponderActive = false;
+        emitInfo("info string ponderhit: continuing with normal clock budget");
+      } else {
+        emitInfo("info string ponderhit ignored: no ponder search in progress");
+      }
     } else if (cmd == "quit") {
       abortFlag.store(true);
       if (searchThread.joinable()) searchThread.join();
@@ -3083,6 +3395,14 @@ int main(int argc, char** argv) {
       const i64 t0 = nowMs();
       const u64 n = perft(d);
       emitInfo("perft " + to_string(d) + " " + to_string((unsigned long long)n) + " " + to_string((long long)(nowMs() - t0)) + "ms");
+    } else if (cmd == "tunebench") {
+      // Hidden diagnostic: Texel coordinate-descent on TUNE[] against a
+      // dataset of <fen>\t<cp> lines. Not advertised as a UCI option.
+      stopSearch();
+      string file;
+      int maxEpochs = 24, subset = 25000;
+      iss >> file >> maxEpochs >> subset;
+      runTexelBench(file, maxEpochs, subset);
     } else if (cmd == "bench") {
       stopSearch();
       clearTT();

@@ -63,7 +63,7 @@ const HEADER_SIZE = 32;
 
 function parseArgs(argv) {
   const opts = { epochs: 24, batch: 64, lr: 0.002, l2: 1e-5, seed: 12345, minPly: 12,
-    w1mult: 1, w2mult: 1, w3mult: 1, dataset: null };
+    w1mult: 1, w2mult: 1, w3mult: 1, dataset: null, evalFile: null, cpWeight: 0 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const val = () => {
@@ -81,9 +81,12 @@ function parseArgs(argv) {
     else if (a === '--seed') opts.seed = parseInt(val(), 10) >>> 0;
     else if (a === '--min-ply') opts.minPly = parseInt(val(), 10);
     else if (a === '--dataset') opts.dataset = val();
+    else if (a === '--eval-file') opts.evalFile = val();
+    else if (a === '--cpweight') opts.cpWeight = Math.max(0, Math.min(7, +val()));
     else if (a === '--help' || a === '-h') {
-      console.log('usage: node tools/nnue/train.js [--epochs N] [--batch N] [--lr F] [--l2 F] [--seed N] [--min-ply N] [--w1mult F] [--w2mult F] [--w3mult F] [--dataset PATH]');
-      console.log('  --dataset PATH  read a games.txt corpus (see tools/nnue/dataset.js) instead of test/human-games/*.pgn');
+      console.log('usage: node tools/nnue/train.js [--epochs N] [--batch N] [--lr F] [--l2 F] [--seed N] [--min-ply N] [--w1mult F] [--w2mult F] [--w3mult F] [--dataset PATH] [--eval-file PATH]');
+      console.log('  --dataset PATH    read a games.txt corpus (see tools/nnue/dataset.js) instead of test/human-games/*.pgn');
+      console.log('  --eval-file PATH  train on Stockfish-labelled positions (JSONL from tools/nnue/label-positions.js)');
       process.exit(0);
     } else {
       throw new Error('unknown argument: ' + a);
@@ -201,6 +204,46 @@ function buildSamples(games, opts) {
     }
   }
   return { positions, gamesMeta };
+}
+
+/**
+ * Builds training samples from Stockfish-labelled positions (JSONL).
+ * Each line: {fen, [split], cp|mate, depth?, nodes?} — cp is from the
+ * side to move's perspective; mate is converted to a saturated cp value.
+ * The split field (train/val/test) is taken from the dataset; FENs without
+ * one are hash-assigned 80/10/10. Validation/test stay game-level disjoint
+ * because labels are unique positions.
+ */
+function buildEvalSamples(opts) {
+  const positions = [];
+  const pos = P.setFen(P.newBoard(), P.START_FEN);
+  const fsLines = fs.readFileSync(opts.evalFile, 'utf8').split('\n');
+  let n = 0, skippedBad = 0;
+  const K = K_CP;
+  for (const raw of fsLines) {
+    const line = raw.trim();
+    if (!line) continue;
+    let rec;
+    try { rec = JSON.parse(line); } catch { skippedBad++; continue; }
+    if (!rec.fen) { skippedBad++; continue; }
+    const cp = typeof rec.mate === 'number' ? (rec.mate > 0 ? 10000 : -10000) : rec.cp;
+    if (typeof cp !== 'number') { skippedBad++; continue; }
+    let feats;
+    try {
+      P.setFen(pos, rec.fen);
+      feats = P.featuresFor(pos.b, pos.side);
+    } catch { skippedBad++; continue; }
+    const side = pos.side;
+    let split = rec.split;
+    if (split !== 'train' && split !== 'val' && split !== 'test') {
+      const h = fnv1a32('frnn1-evalsplit ' + rec.fen) % 100;
+      split = h < 80 ? 'train' : h < 90 ? 'val' : 'test';
+    }
+    const target = 1 / (1 + Math.exp(-Math.max(-10000, Math.min(10000, cp)) / K));
+    positions.push({ game: n, side, feats, fen: rec.fen, target, val: split === 'val', test: split === 'test', cp });
+    n++;
+  }
+  return { positions, gamesMeta: [], skipped: new Map([['bad-lines', skippedBad]]) };
 }
 
 // ---------------------------------------------------------------------------
@@ -434,10 +477,12 @@ function trainEpoch(n, positions, idx, opt, rng, state) {
 
   let lossSum = 0;
   let sat1 = 0, sat2 = 0;
+  let batchWeight = 0;
   const B = opt.batch;
 
   for (let start = 0; start < order.length; start += B) {
     const end = Math.min(start + B, order.length);
+    batchWeight = 0;
     grads.w1.fill(0);
     grads.b1.fill(0);
     grads.w2.fill(0);
@@ -470,13 +515,17 @@ function trainEpoch(n, positions, idx, opt, rng, state) {
         a2[j] = relu(z);
         if (z > 0) sat2++;
       }
+      // Optional importance weight: up-weight decisive positions.
+      const w = s.cp === undefined || !opt.cpWeight ? 1 : 1 + Math.min(7, opt.cpWeight * Math.abs(s.cp) / 150);
+      batchWeight += w;
+
       let out = n.b3[0];
       for (let j = 0; j < H2; j++) out += a2[j] * n.w3[j];
 
       const p = sigmoid(out / K_CP);
       const d = p - s.target;
-      lossSum += d * d;
-      const dout = 2 * d * p * (1 - p) / K_CP;
+      lossSum += w * d * d;
+      const dout = w * 2 * d * p * (1 - p) / K_CP;
 
       grads.b3[0] += dout;
       for (let j = 0; j < H2; j++) {
@@ -501,7 +550,7 @@ function trainEpoch(n, positions, idx, opt, rng, state) {
       }
     }
 
-    const inv = 1 / (end - start);
+    const inv = 1 / Math.max(batchWeight, 1e-6);
     for (let i = 0; i < grads.w1.length; i++) grads.w1[i] = grads.w1[i] * inv + state.l2 * n.w1[i];
     for (let i = 0; i < H1; i++) grads.b1[i] *= inv;
     for (let i = 0; i < grads.w2.length; i++) grads.w2[i] = grads.w2[i] * inv + state.l2 * n.w2[i];
@@ -744,35 +793,42 @@ function main() {
   const started = Date.now();
   const rng = mulberry32(opts.seed);
 
-  const { files, games, plies, skipped } = loadGames(opts);
+  const { files, games, plies, skipped } = opts.evalFile
+    ? { files: [opts.evalFile], games: [{ result: '?' }], plies: 0, skipped: new Map() }
+    : loadGames(opts);
   header.push('# FRNN1 NNUE training log');
   header.push('# date: ' + new Date().toISOString());
-  header.push('# data: test/human-games/*.pgn  files=' + files.length +
-    ' games=' + games.length + ' plies=' + plies);
+  header.push(opts.evalFile
+    ? '# data: Stockfish-labelled positions, file=' + opts.evalFile
+    : '# data: test/human-games/*.pgn  files=' + files.length +
+      ' games=' + games.length + ' plies=' + plies);
   header.push('# data license: CC0 1.0 (Lichess database export), see docs/NNUE.md');
-  header.push('# label: final game result only -> score {1,0.5,0} from side to move');
-  header.push('# split: FNV-1a("kiwa-frnn1 " + gameId) % 100 < 80 -> train; per game');
+  header.push(opts.evalFile
+    ? '# label: Stockfish PV1 centipawns -> sigmoid(cp / 400) from side to move'
+    : '# label: final game result only -> score {1,0.5,0} from side to move');
+  header.push('# split: by dataset split field, else fnv1a(fen) % 100 80/10/10 (train/val/test)');
   header.push('# net: 768 -> ' + H1 + ' -> ' + H2 + ' -> 1; dynamic power-of-two scales in header; K=' + K_CP + 'cp');
   header.push('# opts: epochs=' + opts.epochs + ' batch=' + opts.batch + ' lr=' + opts.lr +
     ' seed=' + opts.seed + ' minPly=' + opts.minPly);
-  header.push('# skipped games: ' + JSON.stringify([...skipped.entries()]));
   header.push('');
 
   const tData = Date.now();
-  const { positions, gamesMeta } = buildSamples(games, opts);
+  const samples = opts.evalFile ? buildEvalSamples(opts) : buildSamples(games, opts);
+  const { positions, gamesMeta } = samples;
   const trainIdx = [];
   const valIdx = [];
-  for (let i = 0; i < positions.length; i++) (positions[i].val ? valIdx : trainIdx).push(i);
-  const trainGames = gamesMeta.filter(g => !g.val).length;
-  const valGames = gamesMeta.filter(g => g.val).length;
+  const testIdx = [];
+  for (let i = 0; i < positions.length; i++) {
+    if (positions[i].test) testIdx.push(i);
+    else if (positions[i].val) valIdx.push(i);
+    else trainIdx.push(i);
+  }
   const drawCount = games.filter(g => g.result === '1/2-1/2').length;
 
-  log('data: ' + files.length + ' pgn files, ' + games.length + ' games, ' + plies + ' plies (' +
-    (Date.now() - tData) + ' ms to replay + featurize)');
-  log('split: ' + trainGames + ' train games / ' + valGames + ' val games; ' +
-    trainIdx.length + ' train positions / ' + valIdx.length + ' val positions (ply >= ' + opts.minPly + ')');
-  log('results: ' + games.filter(g => g.result === '1-0').length + ' white wins, ' +
-    games.filter(g => g.result === '0-1').length + ' black wins, ' + drawCount + ' draws');
+  log('data: ' + (opts.evalFile ? 'eval-labelled positions' : files.length + ' pgn files') +
+    ', positions: ' + positions.length + ' (' + (Date.now() - tData) + ' ms to featurize)');
+  log('split: ' + trainIdx.length + ' train / ' + valIdx.length + ' val / ' + testIdx.length +
+    ' test positions');
 
   if (trainIdx.length < 1000 || valIdx.length < 200) {
     throw new Error('not enough positions: train=' + trainIdx.length + ' val=' + valIdx.length);
@@ -846,6 +902,7 @@ function main() {
   const q = quantize(n);
   const finalQ = quantizedMSE(q, positions, valIdx);
   const acc = accuracy(n, positions, valIdx);
+  const testAcc = testIdx.length ? accuracy(n, positions, testIdx) : null;
   const trainQ = quantizedMSE(q, positions, trainIdx);
 
   log('');
@@ -858,6 +915,7 @@ function main() {
   log('final quantized val MSE  : ' + finalQ.toFixed(6));
   log('final quantized train MSE: ' + trainQ.toFixed(6));
   log('val sign accuracy (decisive only): ' + (acc * 100).toFixed(2) + '%');
+  if (testAcc !== null) log('test sign accuracy (decisive only): ' + (testAcc * 100).toFixed(2) + '%');
   log('baseline constant val MSE: ' + baseMSE.toFixed(6));
   log('quantization shifts     : w1 ' + q.shift1 + ', w2 ' + q.shift2 + ', w3 ' + q.shift3);
   log('quantized clipping events: ' + q.clipped + ' (int16 range overflow)');
@@ -867,27 +925,34 @@ function main() {
   log('wrote ' + NET_PATH + ' (' + wrote.bytes + ' bytes, checksum 0x' +
     wrote.checksum.toString(16).padStart(8, '0') + ')');
 
-  // selftest: 12 validation games x 16 consecutive plies starting at minPly
-  const valGameIds = games.map((g, i) => ({ g, i })).filter(x => gamesMeta[x.i].val && x.g.moves.length >= opts.minPly + 16);
-  valGameIds.sort((a, b) => (a.g.id < b.g.id ? -1 : a.g.id > b.g.id ? 1 : 0));
-  const chosen = valGameIds.slice(0, 12);
-  if (chosen.length < 4) throw new Error('not enough validation games for selftest');
-
   const ev = makeEvaluator(q);
   const lines = [];
   const sampleEvals = [];
   const pos = P.setFen(P.newBoard(), P.START_FEN);
-  for (const { g } of chosen) {
-    P.setFen(pos, P.START_FEN);
-    for (let m = 0; m < g.moves.length; m++) {
-      P.applyUci(pos, g.moves[m]);
-      const ply = m + 1;
-      if (ply < opts.minPly || ply >= opts.minPly + 16) continue;
-      const feats = P.featuresFor(pos.b, pos.side);
-      const cp = ev(feats);
-      lines.push(P.getFen(pos) + '|' + cp);
-      const sc = resultScore(g.result) ?? 0.5;
-      sampleEvals.push({ fen: P.getFen(pos), cp, side: pos.side, target: pos.side === 0 ? sc : 1 - sc });
+
+  if (opts.evalFile) {
+    // Eval mode has no games; selftest positions come from the validation set.
+    const valPositions = valIdx.map(i => positions[i]);
+    const chosen = valPositions.slice(0, 192);
+    for (const p of chosen) lines.push(p.fen + '|' + ev(p.feats));
+  } else {
+    const valGameIds = games.map((g, i) => ({ g, i })).filter(x => gamesMeta[x.i].val && x.g.moves.length >= opts.minPly + 16);
+    valGameIds.sort((a, b) => (a.g.id < b.g.id ? -1 : a.g.id > b.g.id ? 1 : 0));
+    const chosen = valGameIds.slice(0, 12);
+    if (chosen.length < 4) throw new Error('not enough validation games for selftest');
+
+    for (const { g } of chosen) {
+      P.setFen(pos, P.START_FEN);
+      for (let m = 0; m < g.moves.length; m++) {
+        P.applyUci(pos, g.moves[m]);
+        const ply = m + 1;
+        if (ply < opts.minPly || ply >= opts.minPly + 16) continue;
+        const feats = P.featuresFor(pos.b, pos.side);
+        const cp = ev(feats);
+        lines.push(P.getFen(pos) + '|' + cp);
+        const sc = resultScore(g.result) ?? 0.5;
+        sampleEvals.push({ fen: P.getFen(pos), cp, side: pos.side, target: pos.side === 0 ? sc : 1 - sc });
+      }
     }
   }
   fs.writeFileSync(SELFTEST_PATH, lines.join('\n') + '\n');
@@ -908,16 +973,25 @@ function main() {
   }
 
   // accumulator consistency on every legal position of every game, both perspectives
-  const accCheck = selfCheckAccumulator(q, games);
-  log('accumulator checks: ' + accCheck.checks + ' comparisons, ' + accCheck.mismatches + ' mismatches');
+  let accCheck;
+  if (opts.evalFile) {
+    // No game history in eval mode; the accumulator logic is identical to the
+    // game-trained net and is covered by the selftest parity check instead.
+    accCheck = { checks: 0, mismatches: 0 };
+    log('accumulator checks: skipped in eval-file mode (covered by selftest parity)');
+  } else {
+    accCheck = selfCheckAccumulator(q, games);
+    log('accumulator checks: ' + accCheck.checks + ' comparisons, ' + accCheck.mismatches + ' mismatches');
+  }
   if (accCheck.mismatches !== 0) throw new Error('accumulator self-check failed');
 
   log('');
   log('sample evals (cp, side-to-move perspective):');
   for (const s of show) log('  ' + s.name.padEnd(30) + ' ' + (s.cp_stm >= 0 ? '+' : '') + s.cp_stm + '  [' + s.side + ' to move]');
   log('');
-  log('selftest: ' + lines.length + ' positions from ' + chosen.length +
-    ' validation games -> ' + SELFTEST_PATH);
+  log('selftest: ' + lines.length + ' positions' +
+    (opts.evalFile ? ' (from the validation set)' : ' from validation games') +
+    ' -> ' + SELFTEST_PATH);
   log('selftest example: ' + lines[0]);
   log('total time: ' + ((Date.now() - started) / 1000).toFixed(1) + ' s');
 
@@ -925,8 +999,12 @@ function main() {
     generatedAt: new Date().toISOString(),
     data: { files, games: games.length, plies, draws: drawCount, license: 'CC0-1.0' },
     split: {
-      hash: 'FNV-1a("kiwa-frnn1 " + gameId) % 100 >= 80 -> validation',
-      trainGames, valGames, trainPositions: trainIdx.length, valPositions: valIdx.length,
+      hash: opts.evalFile
+        ? 'dataset split field (train/val/test), else fnv1a(fen) % 100 80/10/10'
+        : 'FNV-1a("kiwa-frnn1 " + gameId) % 100 >= 80 -> validation',
+      trainPositions: trainIdx.length,
+      valPositions: valIdx.length,
+      testPositions: testIdx.length,
       minPly: opts.minPly,
     },
     net: {
@@ -949,6 +1027,7 @@ function main() {
       trainMSEQuantized: trainQ,
       baselineValMSE: baseMSE,
       valSignAccuracy: acc,
+      testSignAccuracy: testAcc,
       int16ClippedWeights: q.clipped,
       accumulatorChecks: accCheck.checks,
       accumulatorMismatches: accCheck.mismatches,

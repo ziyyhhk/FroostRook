@@ -368,18 +368,65 @@ pass (amortized over the pass). There is no SIMD; these are plain scalar loops.
   handcrafted evaluation**, and the engine does not use it. Integrating it
   would require a much larger, higher-quality dataset (and likely a larger
   network and better training schedule) before it could compete.
-- **No retraining on larger data was completed.** `tools/nnue/dataset.js` was
-  added so a bigger CC0 corpus can be assembled reproducibly, but it was not
-  run to produce a training set, `train.js` was not changed to consume it, and
-  no new network is shipped. The shipped `frnn1.bin` is still the 876-game
-  model described above, and the handcrafted evaluation remains the default
-  and the only evaluator used in play.
+- **FRNN1 remains the experimental net and is not integrated.** It was
+  retrained with the best-checkpoint scheme on the 876-game set for the
+  1.0.3-beta release (val MSE 0.213855 vs 0.214711) and is unchanged in
+  1.1.0-beta. A much larger CC0 corpus with Stockfish labels was built for
+  the 1.1.0 cycle and trains stably, but its quality only reaches the
+  material baseline (see FRNN2 below), so it is not shipped as the
+  evaluation either. The handcrafted evaluator remains the only evaluator
+  used in play.
 - Possible next steps (not done here): run `dataset.js` on enough months to
   produce a materially larger corpus, then train with
   `node tools/nnue/train.js --dataset data/nnue/games.txt ...` (the flag is
   wired in 1.0.3-beta; no corpus has been produced or consumed for this
   release), WDL/depth-aware labels, king buckets, SIMD, and training with a
   small opening-book filter. None of these are claimed as implemented.
+
+## FRNN2: a Stockfish-eval-labelled corpus and a second net (experimental)
+
+For this release the tooling was extended so the trainer can consume a
+large, high-quality label source instead of game results:
+
+- `tools/nnue/build-eval-dataset.js` replays a CC0 Lichess standard PGN dump
+  and extracts positions (404,459 qualifying games scanned from a 307 MB
+  October 2026 prefix, filtered to >=1800 Elo, Standard, non-aborted;
+  220,000+ positions sampled evenly across games).
+- The same dump supplied a 574,985-position Stockfish-evaluation shard
+  (depth >= 25, PV1 cp) from the open `lichess_db_eval.jsonl.zst` prefix
+  (first ~660 MB, decompressed frame-by-frame; positions split by FNV-1a
+  of the FEN into train/validation/test 80/10/10).
+- `tools/nnue/label-positions.js` labels any FEN list with a local Stockfish,
+  with incremental output so multi-day runs survive interruptions.
+- `tools/nnue/train.js` gained `--eval-file` (consume a labelled JSONL,
+  split from the file or by FEN hash 80/10/10), `--cpweight` (importance
+  weighting of decisive positions; found to *hurt* validation MSE and left
+  off), best-checkpoint export (as in 1.0.3-beta), and per-parameter Texel
+  clamping in the separate `tunebench` mode.
+
+The corpus is **601,417 positions** (train 481,592 / validation 59,999 /
+test 59,826), all Stockfish PV1 depth-25-to-46 labels, CC0 data. A 40-epoch
+run of the same 768→64→64→1 architecture gives:
+
+| Metric | Value |
+| --- | --- |
+| Validation MSE | **0.016495** |
+| Two-parameter material baseline, same split | **0.016475** |
+| Test MSE (reporting only) | n/a |
+| Sign accuracy, decisive-only (val / test) | **63.07 % / 63.27 %** |
+| Two-parameter material baseline, decisive-only | **62.60 %** |
+| Quantized validation MSE | 0.016496 |
+
+It is **a wash against the material baseline on MSE** (slightly worse) and a
+~+0.5 point sign-accuracy edge on decisive positions. It is also
+material-blind on synthetic probes (`startpos +25`, `white queen up +124`,
+`black queen up +15`, `after 1.e4 +12`). It is **not integrated**; measured
+skill is not the point — the architecture/optimization recipe simply cannot
+express this distribution strongly enough at this size and data quality. The
+honest conclusion: the trainable signal in 601k random-position labels is
+close to the information a two-parameter logistic model already has, and
+better data (Stockfish self-play or teacher labels of equal positions) would
+be required to move past it.
 
 ## Reproducing
 

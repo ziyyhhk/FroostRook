@@ -1,4 +1,4 @@
-# Building FroostRook 1.0.3 Beta
+# Building FroostRook 1.1.0 Beta
 
 ## Native engine (Windows x64)
 

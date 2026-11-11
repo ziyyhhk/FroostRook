@@ -1,4 +1,4 @@
-# FroostRook 1.0.3 Beta — test and measurement report
+# FroostRook 1.1.0 Beta — test and measurement report
 
 This is the full record behind the numbers in `README.md`. It covers what was
 tested, how, on what hardware, and what the results do **not** prove. Every
@@ -18,7 +18,7 @@ No Elo, speed or accuracy figure is estimated or extrapolated.
 - Engine under test: `FroostRook.exe` built with the same portable x86-64
   command CI uses (section 11 measurements), 6,338,907 bytes, SHA-256
   `ef547975442a552af0f0c641e54324e463646729b037dc235b90467b8d452cf8`;
-  UCI id `FroostRook 1.0.3 Beta`. A rebuild with the same source and flags is not
+  UCI id `FroostRook 1.1.0 Beta`. A rebuild with the same source and flags is not
   byte-identical because the resource/linker timestamps change, so the
   CI-built asset's hash can differ.
 - Baselines: `fr1-release.exe`, the published `v1.0.0-beta` asset, SHA-256
@@ -57,7 +57,7 @@ special-move fixture.
 UCI checklist (run manually on the release binary):
 
 ```
-uci                  -> id name FroostRook 1.0.3 Beta, all options, uciok
+uci                  -> id name FroostRook 1.1.0 Beta, all options, uciok
 isready              -> readyok
 position startpos
 go depth 10          -> info lines, bestmove
@@ -511,3 +511,116 @@ AVX2> --anchor 2200 --pairs 20 --ms 100` (book on, colour-swapped):
 - No Syzygy tablebase support; endgame play still relies on search and
   handcrafted terms.
 - No integrated NNUE; the prototype remains below a material baseline.
+
+## 12. Release 1.1.0-beta measurements (2026-11-11)
+
+This section covers what shipped in 1.1.0-beta and — explicitly — what was
+tried and rejected. The release adds no playing-strength change; the engine
+core is the 1.0.3-beta one (excluding the bullet-proofed internals listed
+below). Every match remains 60-100 ms/move bullet chess on this machine.
+
+### What shipped
+
+- **UCI pondering.** `position ... ponder <move>` sets up the predicted
+  position, `go ponder` searches it indefinitely (until the opponent's
+  predicted move is confirmed or the move is changed), `ponderhit` converts
+  the running search to the normal clock budget **without restarting it**
+  (hard/soft stop latches and the node budget are shared atomics consulted
+  by the search's time check), and `stop` aborts it when the prediction was
+  wrong. Covered by `test/ponder-test.js` (handshake, info emission, legal
+  bestmove after ponderhit, prompt abort on `stop`, own-cap termination),
+  wired into `npm run test:all` and the CI workflow.
+- **movetime searches** keep the exact 1.0.3-beta behavior (full movetime is
+  consumed; the earlier soft-stop candidate tested worse and was reverted).
+  The clock budget was factored into one shared function
+  (`clockBudget`) used by `go` and by the `ponderhit` conversion; hard/soft
+  stop latches and the node budget are shared atomics so the running search
+  picks up new limits without being restarted. No change to depth-, node-, or
+  clock-limited search.
+- **Reliability re-verified** on this tree: full test suite passes
+  (perft JS+native exact, rules, book 5622? no — book unchanged at 5580,
+  MultiPV UCI smoke, analyzer 62/62, ponder smoke, openings suite with the
+  CI invocation).
+
+### What did NOT ship, with the measurements that decided it
+
+- **Texel-tuned evaluation** (instrumented as `tunebench`, a hidden
+  diagnostic command implementing coordinate descent over the 65 evaluation
+  parameters against a Stockfish-labelled 601,417-position corpus,
+  train/validation/test split by FEN hash, 30,000-position
+  training subsample, 60,141-position validation set, 50 % parameter clamp
+  around the shipped values):
+  validation MSE 0.0251 -> 0.0241, but the clamped run still
+  produced **-98 Elo (+23 =12 -45, 36.3% score, 95% CI -138 to -58, n=80)**
+  against 1.0.3-beta. The unclamped run was worse (-98 Elo as well in its
+  rejection duel — same fixture). Rejected; the shipped evaluation values
+  are unchanged. The tuner is retained as infrastructure, unused at
+  runtime.
+- **Endgame opposition term** (distant/diagonal opposition in pure pawn
+  endings, +14 cp for the side not to move): **41.3% (+25 =16 -39,
+  -61 Elo, 95% CI -99 to -23, n=80)** against 1.0.3-beta. Rejected; not in
+  the engine.
+- **Opening book regeneration** from ~73,242 qualifying CC0 games (204,459
+  positions analysed, 121,477 games with >=1600 Elo; merged with the named
+  book under personality personalities): after the merge the Positional
+  personality's median book depth fell to 4/6 plies, below the
+  `test/openings-native.js` floor — the expansion exposed shallow
+  catalogued theory under the reweighted lines. Rejected; the 1.0.3-beta
+  book (5,580 positions / 8,134 moves) ships unchanged.
+- **NNUE trained on Stockfish-labelled positions** (the 601k corpus above;
+  split by FEN hash 80/10/10; 768->64->64->1 FRNN2, best-checkpoint
+  export): 40 epochs reach validation MSE 0.016495 vs 0.016475 for a
+  two-parameter material baseline on the same split — a wash — with
+  63.07%/63.27% decisive-position sign accuracy vs 62.6% for the material
+  baseline. It remains material-blind on synthetic queen-up probes
+  (+11/+3 cp) and is not integrated. The shipped FRNN1 (result-target,
+  876 CC0 games, best-checkpoint epoch 17, val MSE 0.213855, parity
+  selftest 192/192) is unchanged. Summary: the pipeline now *can* train on
+  Stockfish evaluations; the corpus is learnable but adds nothing the
+  material baseline doesn't already know; integration would not strengthen
+  the engine.
+- **RubiChess**: not downloadable from this environment (the official
+  distribution points at hosts that do not resolve here; the web search
+  quota is exhausted). Testing against RubiChess is therefore **not
+  done**; the external anchor is Stockfish 17.1 (AVX2) at
+  `UCI_LimitStrength=true`, `UCI_Elo=2200`.
+- **Syzygy tablebases**: not integrated. There are no local tablebase
+  files to verify a probing implementation against, and an unverifiable
+  probing path would be a correctness risk shipped to users. The engine
+  instead ships with its existing endgame knowledge unchanged; obtaining
+  and validating tablebases remains future work.
+
+### Control conditions
+
+Identical to section 1 and 11: i3-5005U (2 cores/4 threads), Windows 10,
+MSYS2 UCRT64 g++ 16.2.0, Node 24, all matches colour-swapped at the same
+movetime on the same opening set; both sides Hash 64 MB, Move Overhead
+30 ms. The 1.1.0-vs-1.0.3-beta duel used the same 12 openings, colours
+swapped, 60 ms/move, book off.
+
+- Duel: **+28 =13 −39, 34.5/80 = 43.1%, −48 Elo (±39 1σ sampling, n=80;
+  95% CI approximately −124 to +28)**. White 45.0%, Black 41.3%; mean
+  reported depth 7.0 both sides, 17,703 vs 18,008 nodes/move. The two
+  binaries search an identical tree — `bench` reports exactly 660,264 nodes
+  for both and a fixed-node move probe gave identical bestmoves on every
+  probed position — so this is bullet-time noise at 60 ms/move on a heavily
+  loaded machine, not a strength difference. The CI interval includes zero;
+  the release makes no rating claim and adds no playing-strength feature.
+
+### Failures and rejections
+
+The two duels above are the failures; the book regression was caught by
+the opening suite before any release claim. The tuner instrumentation is
+retained (it is how the tuning experiments were run) but plays no role in
+the shipped engine's evaluation; `tunebench` is a hidden diagnostic, same
+category as `perft`/`bench`.
+
+### Known gaps (1.1.0 additions)
+
+- The 1.1.0 release adds a protocol feature (ponder) and reliability work,
+  not an Elo delta.
+- No Syzygy tablebase support.
+- No RubiChess match; the external anchor remains Stockfish `UCI_Elo 2200`
+  at 100 ms/move, book on (performance ~2253 for the 1.0.3 core).
+- Every match here is bullet time control; longer time controls are
+  untested.

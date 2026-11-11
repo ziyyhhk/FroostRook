@@ -1,8 +1,8 @@
-# FroostRook 1.0.3 Beta
+# FroostRook 1.1.0 Beta
 
-<img src="assets/engine-icon.png" alt="FroostRook 1.0.3 Beta" width="200" align="right">
+<img src="assets/engine-icon.png" alt="FroostRook 1.1.0 Beta" width="200" align="right">
 
-FroostRook 1.0.3 Beta is a from-scratch chess engine: a C++17 search core with a
+FroostRook 1.1.0 Beta is a from-scratch chess engine: a C++17 search core with a
 handcrafted evaluator, a Node.js front-end, an embedded opening repertoire, a
 human-move predictor and a PGN analysis tool. It plays the standard game,
 speaks UCI, and ships as a single static Windows executable.
@@ -10,13 +10,14 @@ speaks UCI, and ships as a single static Windows executable.
 This is the repository formerly named `ziyyhhk/kiwa-engine`. GitHub redirects
 the old URL and keeps the history, tags and releases.
 
-> **Name and version:** the public engine name is exactly **FroostRook 1.0.3 Beta**
-> (capital F, R and B). `1.0.3-beta` is the package version used in archives.
-> The UCI handshake returns `id name FroostRook 1.0.3 Beta`.
+> **Name and version:** the public engine name is exactly **FroostRook 1.1.0 Beta**
+> (capital F, R and B). `1.1.0-beta` is the package version used in archives.
+> The UCI handshake returns `id name FroostRook 1.1.0 Beta`.
 
 ## Contents
 
 - [Quick start](#quick-start)
+- [What changed in 1.1.0 Beta](#what-changed-in-110-beta)
 - [What changed in 1.0.3 Beta](#what-changed-in-103-beta)
 - [What changed in 1 Beta](#what-changed-in-1-beta)
 - [Engine and UCI](#engine-and-uci)
@@ -54,6 +55,34 @@ node uci.js                 # UCI session through the front-end
 node play.js                # play in the terminal
 node analyze.js --pgn game.pgn --depth 12
 ```
+
+## What changed in 1.1.0 Beta
+
+- **UCI pondering support (feature).** `position ... ponder <move>` sets up
+  the predicted position, `go ponder` searches it, `ponderhit` converts the
+  ongoing search to the normal clock budget without restarting it, and `stop`
+  aborts it promptly. A regression suite (`test/ponder-test.js`) covers both
+  the ponderhit and the out-of-book-stop paths, and is wired into `npm run
+  test:all` and the CI workflow.
+- **Release identity:** UCI handshake `id name FroostRook 1.1.0 Beta`,
+  package.json 1.1.0-beta, `app.rc` 1.1.0.0, `build.bat` portability default
+  (`build.bat native` for CPU-specific builds), CI builds the portable x86-64
+  asset only.
+- **Strength parity, not an Elo gain.** The engine's normal search is
+  byte-for-byte identical to 1.0.3-beta (same bench node count, same WAC).
+  The bullet-time duel against the shipped 1.0.3-beta binary is in the
+  results table below; every match remains 60–100 ms/move bullet chess; no
+  rating claim is made.
+- **Substantial experimental work was measured and rejected, and is not in
+  the release:** Texel-tuned evaluation (**36.3%** vs 1.0.3-beta, −98 Elo);
+  an endgame opposition term (**41.3%**, −61 Elo); a frequency-weighted
+  opening-book regeneration from ~73k CC0 games (reverted after it reduced
+  the Positional personality's median theory depth below the book-suite
+  floor); and an NNUE retrained on 601k Stockfish-labelled positions
+  (63.1/63.3% decisive sign accuracy vs 62.6% for a two-parameter material
+  baseline — a wash; still material-blind on synthetic queen-up probes — and
+  not integrated). Details in [docs/TESTING.md](docs/TESTING.md) and
+  [docs/NNUE.md](docs/NNUE.md).
 
 ## What changed in 1.0.3 Beta
 
@@ -175,6 +204,12 @@ FroostRook implements the standard UCI handshake and search commands, plus:
 | `Move Overhead` | 30 ms | 0–1000 |
 | `Clear Book Memory`, `Clear Hash` | buttons | |
 
+UCI pondering is supported end to end: `position ... ponder <move>` sets up the
+predicted position, `go ponder` searches it, `ponderhit` converts the ongoing
+search to the normal clock budget without restarting it, and `stop` abandons a
+ponder search whose prediction was wrong. See [docs/UCI.md](docs/UCI.md#pondering)
+and `test/ponder-test.js`.
+
 The native engine also accepts `d`, `eval`, `bookmemory`, `perft <d>` and
 `bench` for diagnostics. `FroostRook.exe perft 5` and `FroostRook.exe bench`
 run without a GUI.
@@ -233,6 +268,7 @@ where wall-clock time was not recorded:
 | FroostRook 1.0.1-beta | 567,818 | 621 ms (593–639) | 0.956 M | 0.914 M (0.889–0.958) |
 | FroostRook 1.0.2-beta | 573,342 | not recorded | 0.719 M | not recorded |
 | FroostRook 1.0.3-beta | 660,264 | not recorded | parity with 1.0.2 on the same loaded machine | not recorded |
+| FroostRook 1.1.0-beta | 660,264 | not recorded | parity with 1.0.3 on the same machine | not recorded |
 
 Against 2.3.0 the patch visits 16.6% fewer nodes and reaches the same depth
 11.5% sooner, while raw wall NPS is 5.7% lower. Against 1.0.0-beta it visits
@@ -273,6 +309,7 @@ for the shipped build, and is not in the release. That result is recorded in
 | For comparison: 1.0.1-beta release vs KiwaChess 2.3.0, same 60 ms fixture | 60 | +21 =14 −25 | 46.7% | −23 (−111 to +65) |
 | **1.0.3-beta vs the shipped 1.0.2-beta binary, 60 ms/move, no book, 40 colour-swapped pairs** | **80** | **+31 =15 −34** | **48.1%** | **−13 (−89 to +63)** |
 | **1.0.3-beta vs Stockfish `UCI_Elo 2200`, 100 ms/move, book on, 20 paired openings** | **40** | **+21 =4 −15** | **57.5%** | **performance 2253 (2145–2361)** |
+| **1.1.0-beta vs the shipped 1.0.3-beta binary, 60 ms/move, no book, 40 colour-swapped pairs** | **80** | **+28 =13 −39** | **43.1%** | **−48 ±39 1σ (CI includes zero)** |
 
 The 1.0.2-beta evaluation was measured in four runs against the same 2.3.0
 binary and fixture: the corrected build scored 44/80, and three earlier runs
@@ -339,6 +376,7 @@ stronger evidence.
 | FroostRook 1.0.1-beta | 2180 (2117–2243) | 46.7% (60 games, 60 ms) | −23 (−111 to +65) |
 | FroostRook 1.0.2-beta | not measured | 55.0% (80 games, 60 ms) | +35 (−41 to +111) |
 | FroostRook 1.0.3-beta | 2253 (2145–2361), 40 games, 100 ms, book on | 48.1% vs 1.0.2-beta (80 games, 60 ms) | n/a vs 2.3.0 |
+| FroostRook 1.1.0-beta | n/a (engine core unchanged) | 43.1% vs 1.0.3-beta (80 games, 60 ms) — a bullet-time, loaded-machine result; identical search tree in both binaries, CI includes zero | n/a vs 2.3.0 |
 
 Stockfish matches used 100 ms/move with the book on: 40 games for 2.3.0,
 1.0.0 and 1.0.3-beta; 120 for 1.0.1. The 2.3.0 matches used no book; 1.0.0,

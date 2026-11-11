@@ -1,4 +1,4 @@
-# FroostRook 1.0.3 Beta — UCI reference
+# FroostRook 1.1.0 Beta — UCI reference
 
 FroostRook speaks standard UCI. The release binary is `FroostRook.exe` (Windows
 x64, portable build). The Node front-end in the `full` package exposes the same
@@ -13,7 +13,7 @@ uci
 replies:
 
 ```
-id name FroostRook 1.0.3 Beta
+id name FroostRook 1.1.0 Beta
 id author ziyyhhk
 id string core C++ native
 ...
@@ -46,13 +46,17 @@ not cleared by `ucinewgame`.
 
 ```
 position startpos moves e2e4 e7e5
+position startpos moves e2e4 ponder e7e5
 position fen <6 FEN fields> moves ...
 go movetime 1000
 go depth 12
 go nodes 100000
 go wtime 60000 btime 60000 winc 1000 binc 1000 movestogo 40
 go infinite
+go ponder wtime 60000 btime 60000
+go ponder
 stop
+ponderhit
 ```
 
 `bestmove 0000` means there is no legal move in the position (checkmate or
@@ -64,6 +68,19 @@ time ... pv <moves>`. With `MultiPV > 1` each line additionally carries
 `multipv <k>`; line 1 is the move returned in `bestmove`. `stop` ends the search
 and reports the best completed iteration. In time-controlled games the engine
 reserves a small move-overhead margin and stops before the clock runs out.
+
+## Pondering
+
+`position ... ponder <move>` tells the engine which move the opponent is
+expected to play; the engine sets up the resulting position as its search
+target. `go ponder` starts a ponder search on it (no book move is taken; a
+real search runs). `ponderhit` reports that the predicted move was played:
+the search is not restarted — it converts to a normal `go` on the same
+position with the usual clock budget (same allocation formula as a regular
+`go`), and finishes with `bestmove` as usual. `stop` abandons the ponder
+search when the prediction was wrong. A ponder search that outlives the
+opponent's move replies on its own 20-second cap; `stop` can always
+interrupt it.
 
 `MultiPV` and the opening book are mutually exclusive: analysis requests never
 take a book move, even in the opening.

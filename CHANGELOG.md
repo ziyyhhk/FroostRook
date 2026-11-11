@@ -1,7 +1,83 @@
 # Changelog
 
 All notable changes to FroostRook are documented here. The release tag for this
-entry is `v1.0.3-beta`. Dates are ISO 8601 (UTC).
+entry is `v1.1.0-beta`. Dates are ISO 8601 (UTC).
+
+## 1.1.0-beta ("FroostRook 1.1.0 Beta")
+
+Released: 2026-11-11. Tag: `v1.1.0-beta`.
+
+This release ships a small number of **measured** changes and documents the
+substantial experimental work that did not survive measurement. No Elo claim is
+made.
+
+### Engine
+
+- **UCI pondering support (feature).** `position ... ponder <move>` sets up the
+  predicted position, `go ponder` searches it, `ponderhit` converts the
+  ongoing search to the normal clock budget without restarting it, and `stop`
+  aborts it promptly when the prediction was wrong. Covered by
+  `test/ponder-test.js`, also wired into `test/all` and CI.
+- **UCI exit reliability (from 1.0.3-beta, re-verified).** Piped stdin closing
+  mid-search no longer calls `std::terminate`.
+- **movetime searches and ordinary clock-managed games** keep the exact
+  1.0.3-beta budget behavior (a movetime search runs for its full movetime;
+  the earlier candidate with a move-allocation soft-stop heuristic tested
+  worse and was reverted). The clock budget was factored into one shared
+  function (`clockBudget`) used by `go` and by the `ponderhit` conversion;
+  hard/soft stop latches and the node budget are shared atomics so the
+  running search picks up new limits without being restarted.
+- Search hard/soft stop latches and the node budget are shared atomics, so
+  `ponderhit` can re-arm them on the running search from the main thread.
+- The 1.0.3-beta search/eval is otherwise unchanged (bench node count,
+  WAC 250/300).
+
+### Measurements and rejected experiments
+
+- **Handcrafted evaluation: unchanged.** A Texel-tuning harness was built
+  (`tunebench`, hidden diagnostic: coordinate descent on the evaluation
+  parameters against a corpus of Stockfish-labelled positions). The tuned net
+  lost by a wide margin in a colour-swapped duel (36.3%, −98 Elo, ±40 1σ over
+  80 bullet games) and is **not shipped**.
+- **Endgame opposition term** (distant opposition in pure pawn endings):
+  measured against 1.0.3-beta at 41.3% (−61 Elo, ±39 1σ, n=80) and is **not
+  shipped**.
+- **Opening book expansion** from CC0 Lichess game statistics (121k games,
+  204k positions; frequency-weighted named book + 119 added moves): reduced
+  the Positional personality's median depth below the `test/openings` floor,
+  and the expansion is **not shipped**; the 1.0.3-beta book is unchanged
+  (5,580 positions / 8,134 moves).
+- **NNUE prototype (experimental):** the training pipeline was substantially
+  reworked (Stockfish-labelled 601k-position corpus, split train/validation/test
+  by position hash; best-checkpoint export; new `--eval-file`,
+  `--cpweight`, `label-positions.js`, `build-eval-dataset.js`,
+  `build-opening-stats.js`, `merge-book.js` tooling in `tools/nnue/`).
+  A 40-epoch run reaches validation MSE 0.016495 vs 0.016475 for a
+  two-parameter material baseline, 63.1/63.3% decisive sign accuracy vs
+  62.6% material — a wash, not an integration. The shipped FRNN1 remains the
+  result-target 876-game net (best-checkpoint epoch 17, val MSE 0.213855,
+  parity selftest 192/192). It is still experimental and still not integrated.
+- **Strength evidence:** bullet duel vs 1.0.3-beta scored **+28 =13 −39,
+  34.5/80 = 43.1%, −48 Elo (±39 1σ sampling, n=80; 95% CI ≈ −124 to +28,
+  includes zero)** — the two binaries search an identical tree (bench 660,264
+  for both; fixed-node probes gave identical bestmoves), so this is bullet-time
+  noise on a heavily loaded machine, not a strength difference. Stockfish
+  `UCI_Elo 2200` anchor remains ~2253 (unchanged engine core). Every match is
+  60–100 ms/move bullet; no rating claim is made.
+- **RubiChess could not be obtained** for testing (not downloadable from this
+  environment; see docs/TESTING.md). Stockfish 17.1 serves as the external
+  anchor.
+- Syzygy tablebases are still not integrated (no local TB files to verify
+  against; see docs/TESTING.md).
+
+### Packaging
+
+- UCI id `FroostRook 1.1.0 Beta`; package.json 1.1.0-beta; app.rc 1.1.0.0;
+  portable generic x86-64 build is the default (`build.bat`, `build.bat native`
+  for local CPU builds); CI builds portable only.
+- Full test suite green (perft JS+native, rules, book, MultiPV, UCI smoke
+  including ponder, openings, analyzer 62/62).
+
 
 ## 1.0.3-beta ("FroostRook 1.0.3 Beta")
 
