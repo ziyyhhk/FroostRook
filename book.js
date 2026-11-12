@@ -43,14 +43,15 @@ function clearMemory(memory) {
 }
 
 // Keeps the session memory but lets recent games dominate. Called once per
-// game: counts round up, so a line seen once is still remembered; repeated
-// lines fade toward 1 instead of being dropped.
+// game: keep ~87.5% per game, so a line seen once is still remembered and
+// heavily played lines fade slowly instead of collapsing to zero after two
+// games (the halving produced a visible "same opening every time" failure).
 function ageMemory(memory) {
   if (!memory) return;
   for (const side of ['white', 'black']) {
     for (const map of [memory[side].moves, memory[side].positions]) {
       for (const [k, v] of [...map]) {
-        const nv = Math.ceil(v / 2);
+        const nv = Math.floor((v * 7 + 3) / 8);
         if (nv > 0) map.set(k, nv); else map.delete(k);
       }
     }

@@ -1766,15 +1766,16 @@ static void bumpBookCount(unordered_map<uint64_t, uint8_t>& m, u64 k) {
   else if (it->second < 12) it->second++;
 }
 
-// Age the counts once per game so recent games dominate without dropping
-// anything outright. Rounding up matters: a line played once keeps count 1,
-// so it is still remembered after ucinewgame; repeated lines fade toward 1.
-// Clearing is explicit via "Clear Book Memory".
+// Age the counts once per game: keep ~87.5% per game, so a line seen once
+// keeps count 1 forever and heavily played lines fade slowly instead of
+// collapsing to zero after two games (the halving produced a visible
+// "same opening every time" failure). Dropping is explicit only via
+// "Clear Book Memory".
 static void ageBookMemory() {
   for (auto& sideMem : bookMem) {
     for (auto* map : { &sideMem.moves, &sideMem.results }) {
       for (auto it = map->begin(); it != map->end();) {
-        it->second = (uint8_t)((it->second + 1) / 2);
+        it->second = (uint8_t)((it->second * 7 + 3) >> 3);
         if (it->second == 0) it = map->erase(it);
         else ++it;
       }
@@ -2963,6 +2964,9 @@ static uint32_t bookPick() {
   }
 
   int r = (int)(bookRng() % (u64)total);
+#ifdef KIWA_DEBUG_BOOK
+  { char dbg[256]; snprintf(dbg, sizeof(dbg), "info string bookdbg total=%d r=%d c0=%d c1=%d c2=%d", total, r, adj[0], adj[1], adj[2]); emitInfo(dbg); }
+#endif
   int chosenIdx = -1;
   for (int i = 0; i < cn; i++) {
     if (adj[i] <= 0) continue;
