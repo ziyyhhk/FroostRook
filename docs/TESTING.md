@@ -624,3 +624,51 @@ category as `perft`/`bench`.
   at 100 ms/move, book on (performance ~2253 for the 1.0.3 core).
 - Every match here is bullet time control; longer time controls are
   untested.
+
+## 13. Wide-NNUE cycle measurements (2026-11-12)
+
+This cycle's work re-attacked the "not stronger" problem on three fronts.
+Two ended in honest negative verdicts; the third produced one absolute,
+suite-verified book improvement.
+
+### Wide net (768→128→64→1) on the Stockfish-labelled CC0 corpus
+
+- Parity with the JS trainer: `nnue_bench` **PASS**; engine-side
+  incremental accumulator check **`deltas=0`** on all probed positions.
+- Val MSE 0.016057 (best checkpoint, epoch 29) vs 0.016475 material
+  baseline, 0.016495 FRNN2, 0.017199 constant.
+- Decisive sign accuracy: **64.3% val / 64.6% test** (material: 62.6%).
+- Playing strength, fixed nodes: **WAC@100k = 150/300 (50.0%)**, versus
+  **250/300 (83.3%)** for the shipped handcrafted evaluator on the
+  identical binary, hash and dose.
+- Playing strength, 60 ms bullet duel vs 1.0.3-beta: **0 wins in 8 games**
+  before the test was stopped (losses at 45–80 plies).
+- Conclusion: rejected on strength evidence. The `NNUE` UCI option
+  remains in the engine (default OFF). The wide net is not shipped.
+
+### Opposition term re-measured on an idle machine (n = 2 × 80 games)
+
+- Sample 1 (loaded machine): 41.3% (+25 =16 -39), −61 Elo ±39.
+- Sample 2 (idle machine): 45.0% (+30 =12 -38), −35 Elo ±39.
+- Combined: 46.2% over 160 games (~−28 ±28 Elo). Consistent, mildly
+  negative in both runs; rejected. The opposition term is not in the
+  production evaluation.
+
+### Opening book: named-only CC0 boost (READY, not released)
+
+- `tools/nnue/merge-book.js --named-only` frequency-boosts 1,269 rows of
+  the curated named repertoire using ~73,242 qualifying CC0
+  standard-dump games (≥ 1600 Elo, both colors). Theory unchanged; the
+  openings suite is green (140 games, 7 personalities, 766 book plies,
+  Positional median depth floor met).
+- Committed to `main` (c3280f5); **not** in any published release.
+  Releasing it as v1.2.0-beta would be legitimate (a verified repertoire
+  reweight, no strength claim) but requires the owner's call.
+
+### Release integrity
+
+- v1.1.0-beta and v1.0.3-beta remain published with their
+  fresh-download-verified assets. No tag was overwritten, no release was
+  deleted, and nothing in this cycle silently altered a shipped
+  artifact.
+
