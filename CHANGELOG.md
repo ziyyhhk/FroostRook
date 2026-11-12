@@ -1,11 +1,23 @@
 # Changelog
 
 All notable changes to FroostRook are documented here. The release tag for this
-entry is `v1.1.0-beta`. Dates are ISO 8601 (UTC).
+entry is `v1.0.3-beta`. Dates are ISO 8601 (UTC).
 
-## 1.1.0-beta ("FroostRook 1.1.0 Beta")
+## 1.0.3-beta re-issued ("FroostRook 1.0.3 Beta")
 
-Released: 2026-11-11. Tag: `v1.1.0-beta`.
+Released: 2026-11-12. Tag: `v1.0.3-beta` (re-issued).
+
+**Re-issue note.** The `v1.1.0-beta` tag was retired on 2026-11-12 at the
+maintainer's request and its content was merged into this re-issue of
+`v1.0.3-beta`. The re-issued engine contains everything listed in this entry
+(UCI pondering, reliability work, release tooling) **plus** the named-only
+opening-book reweight from ~73,242 qualifying CC0 Lichess games (1,269
+named rows re-weighted; theory unchanged; the openings suite passes) and the
+default-OFF experimental `NNUE` option (off the hot path; handcrafted
+evaluator remains default). Strength is **not** improved: the search tree is
+byte-identical to the 2026-11-11 line (bench 660,264 nodes), and every match
+remains bullet-time; the retired 1.1.0-beta duel (+28 =13 −39, 43.1%) is
+documented in `docs/TESTING.md` section 12.
 
 This release ships a small number of **measured** changes and documents the
 substantial experimental work that did not survive measurement. No Elo claim is
@@ -72,14 +84,14 @@ made.
 
 ### Packaging
 
-- UCI id `FroostRook 1.1.0 Beta`; package.json 1.1.0-beta; app.rc 1.1.0.0;
+- UCI id `FroostRook 1.0.3 Beta`; package.json 1.0.3-beta; app.rc 1.0.3.0;
   portable generic x86-64 build is the default (`build.bat`, `build.bat native`
   for local CPU builds); CI builds portable only.
 - Full test suite green (perft JS+native, rules, book, MultiPV, UCI smoke
   including ponder, openings, analyzer 62/62).
 
 
-## 1.0.3-beta ("FroostRook 1.0.3 Beta")
+## 1.0.3-beta — original release (2026-11-11) [superseded by the 2026-11-12 re-issue]
 
 Released: 2026-11-11. Tag: `v1.0.3-beta`.
 

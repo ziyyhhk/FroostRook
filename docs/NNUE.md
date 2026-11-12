@@ -371,7 +371,7 @@ pass (amortized over the pass). There is no SIMD; these are plain scalar loops.
 - **FRNN1 remains the experimental net and is not integrated.** It was
   retrained with the best-checkpoint scheme on the 876-game set for the
   1.0.3-beta release (val MSE 0.213855 vs 0.214711) and is unchanged in
-  1.1.0-beta. A much larger CC0 corpus with Stockfish labels was built for
+  1.0.3-beta. A much larger CC0 corpus with Stockfish labels was built for
   the 1.1.0 cycle and trains stably, but its quality only reaches the
   material baseline (see FRNN2 below), so it is not shipped as the
   evaluation either. The handcrafted evaluator remains the only evaluator

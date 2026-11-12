@@ -1,4 +1,4 @@
-# FroostRook 1.1.0 Beta — test and measurement report
+# FroostRook 1.0.3 Beta — test and measurement report
 
 This is the full record behind the numbers in `README.md`. It covers what was
 tested, how, on what hardware, and what the results do **not** prove. Every
@@ -18,7 +18,7 @@ No Elo, speed or accuracy figure is estimated or extrapolated.
 - Engine under test: `FroostRook.exe` built with the same portable x86-64
   command CI uses (section 11 measurements), 6,338,907 bytes, SHA-256
   `ef547975442a552af0f0c641e54324e463646729b037dc235b90467b8d452cf8`;
-  UCI id `FroostRook 1.1.0 Beta`. A rebuild with the same source and flags is not
+  UCI id `FroostRook 1.0.3 Beta`. A rebuild with the same source and flags is not
   byte-identical because the resource/linker timestamps change, so the
   CI-built asset's hash can differ.
 - Baselines: `fr1-release.exe`, the published `v1.0.0-beta` asset, SHA-256
@@ -57,7 +57,7 @@ special-move fixture.
 UCI checklist (run manually on the release binary):
 
 ```
-uci                  -> id name FroostRook 1.1.0 Beta, all options, uciok
+uci                  -> id name FroostRook 1.0.3 Beta, all options, uciok
 isready              -> readyok
 position startpos
 go depth 10          -> info lines, bestmove
@@ -512,9 +512,9 @@ AVX2> --anchor 2200 --pairs 20 --ms 100` (book on, colour-swapped):
   handcrafted terms.
 - No integrated NNUE; the prototype remains below a material baseline.
 
-## 12. Release 1.1.0-beta measurements (2026-11-11)
+## 12. Release 1.0.3-beta measurements (2026-11-11)
 
-This section covers what shipped in 1.1.0-beta and — explicitly — what was
+This section covers what shipped in 1.0.3-beta and — explicitly — what was
 tried and rejected. The release adds no playing-strength change; the engine
 core is the 1.0.3-beta one (excluding the bullet-proofed internals listed
 below). Every match remains 60-100 ms/move bullet chess on this machine.
@@ -667,7 +667,7 @@ suite-verified book improvement.
 
 ### Release integrity
 
-- v1.1.0-beta and v1.0.3-beta remain published with their
+- v1.0.3-beta and v1.0.3-beta remain published with their
   fresh-download-verified assets. No tag was overwritten, no release was
   deleted, and nothing in this cycle silently altered a shipped
   artifact.

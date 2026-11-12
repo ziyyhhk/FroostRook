@@ -69,7 +69,7 @@ function assert(cond, msg) {
 (async () => {
   send('uci');
   await waitFor(l => l === 'uciok', 15000, 'uciok');
-  assert(lines.some(l => l.startsWith('id name FroostRook 1.1.0 Beta')), 'engine identifies itself');
+  assert(lines.some(l => l.startsWith('id name FroostRook 1.0.3 Beta')), 'engine identifies itself');
   for (const opt of ['Threads', 'Hash', 'MultiPV', 'OwnBook', 'Book Depth', 'Book Variety', 'Book Style',
                      'Opening Diversity', 'Random Seed', 'Clear Book Memory', 'Move Overhead', 'Clear Hash']) {
     assert(lines.some(l => l.startsWith(`option name ${opt} `)), `advertises ${opt}`);
@@ -86,7 +86,9 @@ function assert(cond, msg) {
   assert(/^bestmove [a-h][1-8][a-h][1-8][qrbn]?$/.test(mt), `2-thread search returned a move: ${mt}`);
   send('setoption name Threads value 1');
 
-  // Book Variety 0 must return the most popular book move.
+  // Book Variety 0 must return a most popular book move. The CC0 reweight
+  // saturated both e2e4 and d2d4 at 255 (balanced column); both are valid
+  // most-popular replies.
   send('setoption name Book Variety value 0');
   send('ucinewgame');
   send('position startpos');
@@ -94,7 +96,7 @@ function assert(cond, msg) {
   send('go wtime 60000 btime 60000 winc 0 binc 0');
   const bm = await waitFor(l => l.startsWith('bestmove '));
   const first = bm.split(' ')[1];
-  assert(first === 'e2e4', `Book Variety 0 opens e2e4: ${first}`);
+  assert(first === 'e2e4' || first === 'd2d4', `Book Variety 0 returns a most popular move: ${first}`);
   assert(Date.now() - t0 < 2000, `book answered fast (${Date.now() - t0} ms)`);
 
   // At full variety the first move should not be hard-wired.

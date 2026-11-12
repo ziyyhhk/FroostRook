@@ -3196,7 +3196,7 @@ int main(int argc, char** argv) {
     if (cmd.empty()) continue;
 
     if (cmd == "uci") {
-      emitInfo("id name FroostRook 1.1.0 Beta");
+      emitInfo("id name FroostRook 1.0.3 Beta");
       emitInfo("id author ziyyhhk");
       emitInfo("id string core C++ native");
       emitInfo("option name Threads type spin default 1 min 1 max 8");
