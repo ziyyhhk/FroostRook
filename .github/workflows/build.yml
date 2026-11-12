@@ -26,7 +26,7 @@ jobs:
         run: |
           cd native
           windres app.rc -O coff -o app.o
-          g++ -O3 -std=c++17 -static -o FroostRook.exe kiwa.cpp app.o
+          g++ -O3 -std=c++17 -static -o FroostRook.exe kiwa.cpp nnue.cpp app.o
           ls -l FroostRook.exe
 
       - name: Perft smoke test

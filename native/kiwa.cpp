@@ -12,6 +12,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <cctype>
+
+#include "nnue.h"   // experimental integrated NNUE evaluator (gated by the NNUE option)
+
 #include <cmath>
 #include <string>
 #include <vector>
@@ -249,11 +252,59 @@ static thread_local int history[2 * 128 * 128];
 static thread_local uint32_t moveStack[MAX_PLY];
 
 // ---------------------------------------------------------------------------
+// Experimental NNUE evaluator (integration for FRNN1-format nets).
+// The accumulator below is maintained incrementally through the same two
+// board primitives the search uses everywhere (addPiece/removePieceAt), so
+// search, qsearch, make/unmake, castling, promotions and en passant stay in
+// sync automatically. Threads own their boards thread_local, so the
+// accumulator is thread_local to match.
+// ---------------------------------------------------------------------------
+static nnue::Network nnueNet;
+static bool nnueLoaded = false;
+static atomic<bool> nnueEnabled(false);   // set by the NNUE setoption
+static thread_local nnue::Accumulator nnueAcc;
+
+static bool nnueLoadNet() {
+  const char* envPath = getenv("FROOSTROOK_NNUE");
+  const char* candidates[] = {
+    envPath,
+    "data/nnue/frnn1.bin",
+    "../data/nnue/frnn1.bin",
+    "../../data/nnue/frnn1.bin",
+  };
+#ifdef _WIN32
+  char exeBuf[512];
+  if (GetModuleFileNameA(nullptr, exeBuf, sizeof(exeBuf)) > 0) {
+    string exePath(exeBuf);
+    const size_t slash = exePath.find_last_of("\\/");
+    if (slash != string::npos) {
+      const string dir = exePath.substr(0, slash);
+      const string direct = dir + "/data/nnue/frnn1.bin";
+      const string parent = dir + "/../data/nnue/frnn1.bin";
+      return nnueNet.load(envPath ? envPath : direct.c_str()) || nnueNet.load(direct.c_str()) || nnueNet.load(parent.c_str());
+    }
+  }
+#endif
+  for (const char* c : candidates) {
+    if (!c) continue;
+    if (nnueNet.load(c)) return true;
+  }
+  return false;
+}
+
+static inline void nnueResetAcc() {
+  for (int p = 0; p < 2; p++) {
+    for (int h = 0; h < nnueNet.h1; h++) nnueAcc.v[p][h] = nnueNet.b1[h];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Piece handling
 // ---------------------------------------------------------------------------
 
 static inline void addPiece(int sq, int piece) {
   board[sq] = (int8_t)piece;
+  if (nnueLoaded) nnueNet.addPiece(piece, sq, nnueAcc);
   const int c = piece >> 3, t = piece & 7;
   const int pi = c * 6 + t - 1;
   pieceSq[pi * 16 + pieceCount[pi]++] = sq;
@@ -265,6 +316,7 @@ static inline void addPiece(int sq, int piece) {
 
 static inline int removePieceAt(int sq) {
   const int piece = board[sq];
+  if (nnueLoaded) nnueNet.removePiece(piece, sq, nnueAcc);
   const int c = piece >> 3, t = piece & 7;
   const int pi = c * 6 + t - 1;
   const int cnt = pieceCount[pi];
@@ -314,6 +366,7 @@ static void setFen(const string& fen) {
   key = 0; pawnKey = 0;
   stateTop = 0; histLen = 0;
   epSq = -1;
+  if (nnueLoaded) nnueResetAcc();
 
   istringstream ss(fen);
   string placement, stm, cast, ep, half, full;
@@ -1584,6 +1637,11 @@ static void extras() {
 #endif
 
 static int evaluate() {
+  if (nnueLoaded && nnueEnabled.load(memory_order_relaxed)) {
+    // FRNN nets were trained on Stockfish PV1 evals (which include tempo),
+    // so the net score is used as-is with no hand-added tempo lobe.
+    return nnueNet.evaluate(nnueAcc, side);
+  }
   const int p = phase > 24 ? 24 : phase;
   int s = (mg * p + eg * (24 - p)) / 24;
 #if KIWA_EXTRAS
@@ -3084,6 +3142,7 @@ static void runTexelBench(const string& file, int maxEpochs, int subsetSize) {
 int main(int argc, char** argv) {
   initTables();
   syncTuneArrays();
+  nnueLoaded = nnueLoadNet();
   for (int d = 0; d < MAX_PLY; d++) {
     for (int m = 0; m < MAX_MOVES; m++) {
       if (d < 3) { LMR[d][m] = 0; continue; }
@@ -3152,6 +3211,7 @@ int main(int argc, char** argv) {
       emitInfo("option name Clear Book Memory type button");
       emitInfo("option name Move Overhead type spin default 30 min 0 max 1000");
       emitInfo("option name Clear Hash type button");
+      if (nnueLoaded) emitInfo("option name NNUE type check default false");
       emitInfo("uciok");
     } else if (cmd == "setoption") {
       // setoption name <name, spaces allowed> [value <value>]
@@ -3205,6 +3265,8 @@ int main(int argc, char** argv) {
           clearBookMemory();
         } else if (name == "threads") {
           threads = max(1, min(8, atoi(value.c_str())));
+        } else if (name == "nnue") {
+          nnueEnabled.store(parseBoolValue(value), memory_order_relaxed);
         }
       }
     } else if (cmd == "isready") {
@@ -3388,6 +3450,21 @@ int main(int argc, char** argv) {
                " black_results=" + to_string((unsigned long long)br) +
                " position_results=" + to_string((unsigned long long)posRes) +
                " position_moves=" + to_string((unsigned long long)posMoves));
+    } else if (cmd == "nnuecheck") {
+      // Hidden diagnostic: compare the incrementally maintained accumulator
+      // with a full refresh on the current board. A healthy engine prints 0.
+      stopSearch();
+      if (!nnueLoaded) {
+        emitInfo("info string nnuecheck: no net loaded");
+      } else {
+        nnue::Accumulator full;
+        nnueNet.reset(board, full);
+        int bad = 0;
+        for (int p = 0; p < 2; p++)
+          for (int h = 0; h < nnueNet.h1; h++)
+            if (full.v[p][h] != nnueAcc.v[p][h]) bad++;
+        emitInfo("info string nnuecheck deltas=" + to_string(bad));
+      }
     } else if (cmd == "perft") {
       stopSearch();
       int d = 1;

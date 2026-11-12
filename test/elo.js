@@ -383,11 +383,19 @@ function movesToPgn(game, openingName) {
     throw new Error('Stockfish not found: ' + SF_EXE + ' (use --stockfish PATH or STOCKFISH env)');
   }
 
+  const kiwaExtra = {};
+  if (process.env.FROOSTROOK_ENGINE_OPTS) {
+    for (const pair of process.env.FROOSTROOK_ENGINE_OPTS.split(',')) {
+      const i = pair.indexOf('=');
+      if (i > 0) kiwaExtra[pair.slice(0, i).trim()] = pair.slice(i + 1).trim();
+    }
+  }
   const kiwa = new UciEngine('FroostRook', KIWA_EXE);
   const sf = new UciEngine(DUEL ? 'Opponent' : 'Stockfish', DUEL ? OPP_EXE : SF_EXE);
 
   await kiwa.handshake(Object.assign({ Hash: 64, 'Move Overhead': 30 },
-                                     USE_BOOK ? {} : { OwnBook: 'false' }));
+                                     USE_BOOK ? {} : { OwnBook: 'false' },
+                                     kiwaExtra));
   if (DUEL) {
     await sf.handshake({ Hash: 64, 'Move Overhead': 30, ...(USE_BOOK ? {} : { OwnBook: 'false' }) });
   } else {
@@ -403,6 +411,7 @@ function movesToPgn(game, openingName) {
 
   console.log(DUEL ? 'FroostRook engine duel' : 'FroostRook Elo measurement');
   console.log(`engine     ${kiwa.name}  (${KIWA_EXE})`);
+  console.log(`engine options ${JSON.stringify(kiwaExtra)}`);
   console.log(`opponent   ${sf.name}  (${OPP_EXE || SF_EXE})` +
               (DUEL ? '' : `, UCI_LimitStrength, UCI_Elo ${ANCHOR}`));
   console.log(`book       ${USE_BOOK ? 'on' : 'off'}`);

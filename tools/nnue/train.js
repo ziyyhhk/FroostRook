@@ -34,15 +34,15 @@ const P = require('./pgn.js');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const PGN_DIR = path.join(ROOT, 'test', 'human-games');
-const OUT_DIR = path.join(ROOT, 'data', 'nnue');
-const NET_PATH = path.join(OUT_DIR, 'frnn1.bin');
-const LOG_PATH = path.join(OUT_DIR, 'train.log');
-const SELFTEST_PATH = path.join(OUT_DIR, 'selftest.txt');
-const METRICS_PATH = path.join(OUT_DIR, 'metrics.json');
+let OUT_DIR = path.join(ROOT, 'data', 'nnue');
+let NET_PATH = path.join(OUT_DIR, 'frnn1.bin');
+let LOG_PATH = path.join(OUT_DIR, 'train.log');
+let SELFTEST_PATH = path.join(OUT_DIR, 'selftest.txt');
+let METRICS_PATH = path.join(OUT_DIR, 'metrics.json');
 
 const INPUT_FEATURES = 768;
-const H1 = 32;
-const H2 = 32;
+let H1 = 32;   // override with --h1; C++ loader accepts up to kMaxHidden = 256
+let H2 = 32;   // override with --h2
 
 // Quantized activation units are 0..255. The per-layer power-of-two weight
 // scales are chosen after training (from the actual weight magnitudes) and
@@ -83,10 +83,16 @@ function parseArgs(argv) {
     else if (a === '--dataset') opts.dataset = val();
     else if (a === '--eval-file') opts.evalFile = val();
     else if (a === '--cpweight') opts.cpWeight = Math.max(0, Math.min(7, +val()));
+    else if (a === '--h1') { H1 = Math.max(8, Math.min(256, Math.round(+val()))); }
+    else if (a === '--h2') { H2 = Math.max(8, Math.min(256, Math.round(+val()))); }
+    else if (a === '--out') opts.out = val();
     else if (a === '--help' || a === '-h') {
-      console.log('usage: node tools/nnue/train.js [--epochs N] [--batch N] [--lr F] [--l2 F] [--seed N] [--min-ply N] [--w1mult F] [--w2mult F] [--w3mult F] [--dataset PATH] [--eval-file PATH]');
+      console.log('usage: node tools/nnue/train.js [--epochs N] [--batch N] [--lr F] [--l2 F] [--seed N] [--min-ply N] [--w1mult F] [--w2mult F] [--w3mult F] [--dataset PATH] [--eval-file PATH] [--h1 N] [--h2 N]');
       console.log('  --dataset PATH    read a games.txt corpus (see tools/nnue/dataset.js) instead of test/human-games/*.pgn');
       console.log('  --eval-file PATH  train on Stockfish-labelled positions (JSONL from tools/nnue/label-positions.js)');
+      console.log('  --h1 N            hidden layer 1 size, 8-256, default 32 (shipped FRNN1)');
+      console.log('  --h2 N            hidden layer 2 size, 8-256, default 32');
+      console.log('  --out DIR         write frnn1.bin/train.log/metrics.json elsewhere (default data/nnue)');
       process.exit(0);
     } else {
       throw new Error('unknown argument: ' + a);
@@ -786,6 +792,13 @@ function flushLog(header) {
 
 function main() {
   const opts = parseArgs(process.argv.slice(2));
+  if (opts.out) {
+    OUT_DIR = path.resolve(opts.out);
+    NET_PATH = path.join(OUT_DIR, 'frnn1.bin');
+    LOG_PATH = path.join(OUT_DIR, 'train.log');
+    SELFTEST_PATH = path.join(OUT_DIR, 'selftest.txt');
+    METRICS_PATH = path.join(OUT_DIR, 'metrics.json');
+  }
   fs.mkdirSync(OUT_DIR, { recursive: true });
 
   logLines = [];

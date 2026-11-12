@@ -18,7 +18,7 @@ if errorlevel 1 (
   exit /b 1
 )
 if /i "%~1"=="native" (
-  g++ -O3 -march=native -std=c++17 -static -o FroostRook.exe kiwa.cpp app.o
+  g++ -O3 -march=native -std=c++17 -static -o FroostRook.exe kiwa.cpp nnue.cpp app.o
   if errorlevel 1 (
     echo Build failed.
     exit /b 1
@@ -26,7 +26,7 @@ if /i "%~1"=="native" (
   echo Built CPU-specific %~dp0FroostRook.exe
   goto done
 )
-g++ -O3 -march=x86-64 -mtune=generic -std=c++17 -static -o FroostRook.exe kiwa.cpp app.o
+g++ -O3 -march=x86-64 -mtune=generic -std=c++17 -static -o FroostRook.exe kiwa.cpp nnue.cpp app.o
 if errorlevel 1 (
   echo Build failed.
   exit /b 1

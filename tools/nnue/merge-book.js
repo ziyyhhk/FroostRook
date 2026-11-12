@@ -23,6 +23,7 @@ const path = require('path');
 const STATS_PATH = process.argv[2] || '.build/opening-stats.json';
 const BOOK_PATH = process.argv[3] || 'book.js';
 const MIN_GAMES = 120;
+const NAMED_ONLY = process.argv.includes('--named-only');
 
 const stats = JSON.parse(fs.readFileSync(STATS_PATH, 'utf8'));
 
@@ -75,7 +76,11 @@ for (const [key, moves] of Object.entries(named)) {
 // 2) add missing moves from real games, thresholded by frequency and score.
 //    The root repertoire is deliberately curated and the native engine
 //    restricts root moves to the sound core; additions there are never made.
+//    With --named-only, only step 1 (frequency boosts on the curated named
+//    book) is applied — this preserves the exact named theory while making
+//    the weights reflect real tournament frequency data.
 const START_KEY = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq';
+if (!NAMED_ONLY)
 for (const [key, pos] of Object.entries(positions)) {
   if (key === START_KEY) continue;
   const existing = merged[key] || [];

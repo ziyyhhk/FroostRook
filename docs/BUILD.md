@@ -8,7 +8,7 @@ it has no runtime DLL dependencies.
 ```
 cd native
 windres app.rc -O coff -o app.o
-g++ -O3 -march=x86-64 -mtune=generic -std=c++17 -static -o FroostRook.exe kiwa.cpp app.o
+g++ -O3 -march=x86-64 -mtune=generic -std=c++17 -static -o FroostRook.exe kiwa.cpp nnue.cpp app.o
 ```
 
 Both `windres` and `g++` must be on `PATH` (on this machine the MSYS2 UCRT64
@@ -25,7 +25,7 @@ old scripts.
 For local play you can build a faster machine-specific binary:
 
 ```
-g++ -O3 -march=native -std=c++17 -static -o FroostRook.exe kiwa.cpp app.o
+g++ -O3 -march=native -std=c++17 -static -o FroostRook.exe kiwa.cpp nnue.cpp app.o
 ```
 
 `-march=native` enables AVX2 and other instructions available on the build
