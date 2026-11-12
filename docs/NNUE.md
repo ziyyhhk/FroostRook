@@ -383,6 +383,49 @@ pass (amortized over the pass). There is no SIMD; these are plain scalar loops.
   release), WDL/depth-aware labels, king buckets, SIMD, and training with a
   small opening-book filter. None of these are claimed as implemented.
 
+## FRNN3 (wide): a larger architecture on the same corpus — and why it still does not ship
+
+The 32×32 FRNN2 net reached only the material baseline, leaving "starved
+capacity" as an open explanation for its failure. That hypothesis was tested
+directly by widening the architecture to **768 → 128 → 64 → 1** (~104K
+parameters, ~30× capacity; C++ accumulator limit is 256 per layer) on the
+same 601,417-position Stockfish-labelled corpus with the same recipe
+(30 epochs, lr 2e-4, w1 5×, w2/w3 0.3×):
+
+| Metric | FRNN2 32×32 | FRNN3 128×64 |
+| --- | --- | --- |
+| Best-checkpoint val MSE | 0.016495 | **0.016057** |
+| Two-parameter material baseline | 0.016475 | 0.016475 |
+| Val sign accuracy (decisive) | 63.1 % | **64.3 %** |
+| Test sign accuracy (decisive) | 63.3 % | **64.6 %** |
+| C++/JS parity (`nnue_bench`) | PASS | PASS |
+| Queen-up probe (white/black) | +124 / +15 | **+240 / +52** |
+
+The net genuinely learns more from the labels. **None of it transferred to
+playing strength:**
+
+- **WAC@100,000 nodes (300 positions, deterministic): 150/300 = 50.0%** with
+  `NNUE=true`, versus **250/300 = 83.3%** for the shipped handcrafted
+  evaluator on the same binary.
+- **Colour-swapped bullet duel vs 1.0.3-beta, 60 ms/move, book off:**
+  0 wins in 8 games (loss 45–80 ply checkmates); the duel was stopped
+  after 8 games.
+- NNUE is not faster either: the handcrafted evaluation stays ~1–2 µs/eval
+  per leaf vs a 17 µs full-refresh net eval (incremental accumulation
+  avoids the 17 µs cost inside the search, but the net still costs
+  ~10× more per ply, so at fixed nodes the net's play simply degrades).
+
+**Decision:** the FRNN3 net is not integrated and not shipped. The
+consistent pattern across FRNN1/2/3 — real MSE learning that produces no
+tactical strength — indicates the bottleneck is the *data distribution*
+(random Lichess positions labelled by Stockfish), not architecture size or
+training recipe. Closing it would need SF self-play/teacher labels of
+positions under search (equal-position sampling), which requires the
+labeling at scale this machine cannot reach in a session. The experimental
+`NNUE` UCI option and the narrow accumulator-keeping integration remain in
+the tree (default OFF, handcrafted evaluator default); enabling it forfeits
+tacical playing strength, by measurement, not by opinion.
+
 ## FRNN2: a Stockfish-eval-labelled corpus and a second net (experimental)
 
 For this release the tooling was extended so the trainer can consume a
