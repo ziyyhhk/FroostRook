@@ -12,6 +12,14 @@ const path = require('path');
 const engine = require('../engine.js');
 const native = require('../native');
 
+// Engine options under test, same format as test/elo.js: FROOSTROOK_ENGINE_OPTS="NNUE=true"
+if (process.env.FROOSTROOK_ENGINE_OPTS) {
+  for (const pair of process.env.FROOSTROOK_ENGINE_OPTS.split(',')) {
+    const i = pair.indexOf('=');
+    if (i > 0) native.setOption(pair.slice(0, i).trim(), pair.slice(i + 1).trim());
+  }
+}
+
 engine.setInfoHandler(() => {});
 
 let ms = 300;
