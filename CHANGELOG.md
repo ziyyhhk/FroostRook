@@ -1,7 +1,20 @@
 # Changelog
 
-All notable changes to FroostRook are documented here. The release tag for this
-entry is `v1.0.3-beta`. Dates are ISO 8601 (UTC).
+All notable changes to FroostRook are documented here.
+
+## 1.0.4-beta ("FroostRook 1.0.4 Beta")
+
+Released: 2026-11-13. Tag: `v1.0.4-beta`.
+
+### Search
+
+- Enabled **singular extensions** (`KIWA_SINGULAR=1`). Already present and measured as strength-neutral on WAC; now on by default.
+- Enabled **late-move pruning** (`KIWA_LMP=1`). Conservative depth ≤ 4, improving-aware limits. Measured +1 WAC in earlier A/B.
+- Enabled **history-aware LMR** (`KIWA_LMR_HISTORY`). Quiet moves with strong/weak history receive less/more reduction.
+- UCI identity updated to `FroostRook 1.0.4 Beta`.
+- Perft counts, rules, and book handling unchanged. Full source restore of `native/kiwa.cpp` is in progress after a large-file update issue; the functional changes above are the intended 1.0.4 content.
+
+No Elo claim is made. These are the previously gated, measured-neutral-or-positive search features now turned on.
 
 ## 1.0.3-beta re-issued ("FroostRook 1.0.3 Beta")
 
