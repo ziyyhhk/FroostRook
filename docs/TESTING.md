@@ -1,8 +1,11 @@
-# FroostRook 1.0.3 Beta — test and measurement report
+# FroostRook 1.0.4 Beta — test and measurement report
 
 This is the full record behind the numbers in `README.md`. It covers what was
 tested, how, on what hardware, and what the results do **not** prove. Every
 number below came from a run of the binaries and scripts in this repository.
+Historical sections keep their original 1.0.3/1.1.0-era measurements and
+binaries; the current release and this section 14 supersede them for
+identity and tactics claims.
 No Elo, speed or accuracy figure is estimated or extrapolated.
 
 - Date of final runs: 2026-11-01.
@@ -672,3 +675,68 @@ suite-verified book improvement.
   deleted, and nothing in this cycle silently altered a shipped
   artifact.
 
+
+## 14. Release integrity audit and 1.0.4-beta re-cut (2026-11-13)
+
+This section documents the audit that produced the same-day re-cut of
+`v1.0.4-beta`, and every claim below is reproducible from the tagged tree.
+
+### Audit findings (the critical mistake)
+
+1. **Windows executable metadata said 1.0.3.0.** `native/app.rc` was never
+   bumped for the 1.0.4 tag: the published `FroostRook.exe` carried
+   `FileVersion 1.0.3.0` / `ProductName "FroostRook 1.0.3 Beta"`. CI rebuilds
+   with `windres app.rc`, so the wrong resource shipped verbatim.
+2. **Repository-local binaries were stale.** `native/FroostRook.exe` and
+   `native/kiwa-native.exe` in the working tree answered
+   `id name FroostRook 1.0.3 Beta`; anyone testing or zipping the tree measured
+   the pre-1.0.4 engine. The published CI asset was verified clean by fresh
+   download (`FroostRook.exe uci` → `id name FroostRook 1.0.4 Beta`); the
+   re-cut rebuilds all local artifacts from the moved tag.
+3. **Front-end/docs identity drift.** `uci.js`, `play.js`, `docs/UCI.md`,
+   `docs/BUILD.md`, `assets/README.md`, `test/uci-smoke.js`, `test/elo.js`,
+   the README front page and the CI release title still announced FroostRook
+   1.0.3 Beta. All updated; `test/uci-smoke.js` now asserts the 1.0.4 id.
+   Historical 1.0.3 references in measurement sections are intentionally kept:
+   they describe the binaries that played those matches.
+
+### Engine changes and what they measured
+
+- **`KIWA_LMR_HISTORY` is now `-D`-overridable** (it was a hardcoded
+  `#define 1`); `#ifdef` → `#if` in `negamax`. Default stays 1.
+- **`KIWA_SEE_ORDER` added** (default 1): the SEE call in capture ordering can
+  now be ablated. MVV-LVA measured 241/300 at 100k nodes, 11 positions below
+  the shipped ordering; kept off.
+- Re-measurement of the shipped search configuration, fixed 100k nodes,
+  300 positions (`node test/wac-native.js nodes=100000 300`):
+
+| Build | Bench @ depth 12 | WAC |
+| --- | --- | --- |
+| 1.0.4 as tagged (S1 L1 H1) | 272,589 | **252/300** |
+| 1.0.4, `-DKIWA_LMR_HISTORY=0` | 302,304 | 251/300 |
+| 1.0.3 configuration (S0 L0 H0) | 660,264 | 250/300 |
+| `-DKIWA_SEE_ORDER=0` | 247,029 | 241/300 |
+
+- The 1.0.3 row reproduces the documented 660,264 exactly (same flags CI
+  used), which validates both the toolchain and the reported counts.
+- 1.0.4 vs 1.0.3 is +2 positions at fixed nodes and roughly 2.4x fewer
+  nodes per depth-12 iteration; at bullet time this is expected to be
+  neutral-to-positive. No Elo claim is made; solve-rate differences of
+  ±1-2 positions are within measurement noise, and every historical match
+  in this repository is bullet-time.
+- Singular extensions + LMP remain on by default; razoring (`KIWA_RAZOR=0`)
+  remains off (−29 positions historically); IIR remains absent (measured
+  loss); Texel-tuned evaluation and the opposition term remain out.
+
+### Verification
+
+- `node test/wac-native.js nodes=100000 300` on the four builds above.
+- Full `npm run test:all` green against the 1.0.4-identified build after the
+  identity fixes (perft exact on JS and native, rules, book, prediction,
+  UCI smoke asserting `FroostRook 1.0.4 Beta`, ponder, openings, analysis).
+- `native/FroostRook.exe` and legacy `kiwa-native.exe` rebuilt from the
+  re-cut source with the portable flags (`-march=x86-64 -mtune=generic`);
+  local artifacts now self-identify as FroostRook 1.0.4 Beta.
+- The `v1.0.4-beta` tag was moved to the re-cut commit; CI rebuilt and
+  re-uploaded the release assets (`--clobber`); the release notes were
+  updated to say what the re-cut is.

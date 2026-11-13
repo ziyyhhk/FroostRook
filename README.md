@@ -1,8 +1,8 @@
-# FroostRook 1.0.3 Beta
+# FroostRook 1.0.4 Beta
 
-<img src="assets/engine-icon.png" alt="FroostRook 1.0.3 Beta" width="200" align="right">
+<img src="assets/engine-icon.png" alt="FroostRook 1.0.4 Beta" width="200" align="right">
 
-FroostRook 1.0.3 Beta is a from-scratch chess engine: a C++17 search core with a
+FroostRook 1.0.4 Beta is a from-scratch chess engine: a C++17 search core with a
 handcrafted evaluator, a Node.js front-end, an embedded opening repertoire, a
 human-move predictor and a PGN analysis tool. It plays the standard game,
 speaks UCI, and ships as a single static Windows executable.
@@ -10,9 +10,39 @@ speaks UCI, and ships as a single static Windows executable.
 This is the repository formerly named `ziyyhhk/kiwa-engine`. GitHub redirects
 the old URL and keeps the history, tags and releases.
 
-> **Name and version:** the public engine name is exactly **FroostRook 1.0.3 Beta**
-> (capital F, R and B). `1.0.3-beta` is the package version used in archives.
-> The UCI handshake returns `id name FroostRook 1.0.3 Beta`.
+> **Name and version:** the public engine name is exactly **FroostRook 1.0.4 Beta**
+> (capital F, R and B). `1.0.4-beta` is the package version used in archives.
+> The UCI handshake returns `id name FroostRook 1.0.4 Beta`.
+
+## 1.0.4-beta re-cut (2026-11-13, overwriting the 1.0.4-beta assets)
+
+The 1.0.4-beta release contained the improved search (singular extensions and
+late-move pruning enabled, see "What changed in 1.0.4 Beta" below) but shipped
+with three release-integrity defects, now fixed and re-published as the same
+`v1.0.4-beta` tag with fresh CI-built assets:
+
+- **Stale executable confusion.** The working tree carried a pre-1.0.4 native
+  binary that answered `id name FroostRook 1.0.3 Beta`; a freshly cloned or
+  locally built tree could not tell which build anyone was testing. The
+  release asset itself was CI-built from source (1.0.4 identity verified by
+  fresh download), but local artifacts are now rebuilt or removed and every
+  build path produces 1.0.4-identified binaries.
+- **Windows executable metadata said 1.0.3.0** (`app.rc` was never bumped for
+  the 1.0.4 tag; the file properties of the shipped `FroostRook.exe` showed
+  1.0.3.0). Now 1.0.4.0.
+- **Front-end/docs identity drift.** The Node front-end, play mode, build
+  workflow release title, README, UCI reference and the UCI smoke test still
+  announced "FroostRook 1.0.3 Beta". All now say FroostRook 1.0.4 Beta.
+
+Search defaults were re-measured on this machine before re-publishing
+(`test/wac-native.js nodes=100000 300`, deterministic): the 1.0.4 search
+(singular + late-move pruning + history-aware LMR) solves **252/300** versus
+**250/300** for the 1.0.3 configuration (bench 272,589 vs 660,264 nodes);
+with history-aware LMR compiled out it is 251/300 at 302,304 nodes — within
+noise on WAC, so the shipped default stays as 1.0.4 shipped it. No Elo claim
+is made; strength evidence remains bullet-time and tactical-suite based. See
+[docs/TESTING.md](docs/TESTING.md) section 14 and
+[CHANGELOG.md](CHANGELOG.md) for the full record.
 
 ## 1.0.3-beta re-issue (2026-11-12)
 
@@ -29,6 +59,8 @@ remains bullet-time. Assets were re-verified by fresh download.
 ## Contents
 
 - [Quick start](#quick-start)
+- [1.0.4-beta re-cut (2026-11-13)](#104-beta-re-cut-2026-11-13-overwriting-the-104-beta-assets)
+- [What changed in 1.0.4 Beta](#what-changed-in-104-beta)
 - [1.0.3-beta re-issue (2026-11-12)](#103-beta-re-issue-2026-11-12)
 - [What changed in 1.1.0 Beta](#what-changed-in-110-beta)
 - [What changed in 1.0.3 Beta](#what-changed-in-103-beta)
@@ -68,6 +100,22 @@ node uci.js                 # UCI session through the front-end
 node play.js                # play in the terminal
 node analyze.js --pgn game.pgn --depth 12
 ```
+
+## What changed in 1.0.4 Beta
+
+- **Search defaults kept, re-measured:** singular extensions (`KIWA_SINGULAR=1`),
+  late-move pruning (`KIWA_LMP=1`) and history-aware LMR (`KIWA_LMR_HISTORY=1`),
+  now a proper `-D`-overridable switch. This machine, fixed 100k nodes, 300
+  positions: **252/300** for the shipped configuration versus **251/300**
+  (LMR-history compiled out) and **250/300** (1.0.3 configuration) — the
+  strongest fixed-node tactical result on record for this engine; bench
+  272,589 nodes at depth 12. No Elo claim.
+- **Release integrity re-cut:** `app.rc` 1.0.4.0, README/front-end/workflow/
+  smoke-test identity all say 1.0.4 — see
+  [1.0.4-beta re-cut](#104-beta-re-cut-2026-11-13-overwriting-the-104-beta-assets).
+- **Ablation retained:** `-DKIWA_SEE_ORDER=0` (MVV-LVA-only capture ordering)
+  is kept for measurement; it solves 241/300 on the same suite, 11 positions
+  below the shipped SEE-ordered default, and is not recommended for play.
 
 ## What changed in 1.1.0 Beta
 

@@ -1,4 +1,4 @@
-# FroostRook 1.0.3 Beta — UCI reference
+# FroostRook 1.0.4 Beta — UCI reference
 
 FroostRook speaks standard UCI. The release binary is `FroostRook.exe` (Windows
 x64, portable build). The Node front-end in the `full` package exposes the same
@@ -13,7 +13,7 @@ uci
 replies:
 
 ```
-id name FroostRook 1.0.3 Beta
+id name FroostRook 1.0.4 Beta
 id author ziyyhhk
 id string core C++ native
 ...

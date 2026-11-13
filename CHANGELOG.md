@@ -2,9 +2,61 @@
 
 All notable changes to FroostRook are documented here.
 
-## 1.0.4-beta ("FroostRook 1.0.4 Beta")
+## 1.0.4-beta re-cut ("FroostRook 1.0.4 Beta", same tag `v1.0.4-beta`)
 
-Released: 2026-11-13. Tag: `v1.0.4-beta`.
+Released: 2026-11-13 (overwriting the 2026-11-13 04:47 UTC `v1.0.4-beta` artifacts). Tag: `v1.0.4-beta` (moved).
+
+The 1.0.4-beta release shipped with release-integrity defects. This re-cut
+fixes them; the search defaults, dependencies and book are unchanged in
+effect, and the fresh CI build at the moved tag is the release binary.
+
+### Release integrity (the critical fix)
+
+- **Windows executable metadata said 1.0.3.0.** `app.rc` was never bumped for
+  the 1.0.4 tag, so the shipped `FroostRook.exe` properties showed 1.0.3.0.
+  Now 1.0.4.0 (CI rebuilds with `windres app.rc`).
+- **Stale native binary in the working tree answered `id name FroostRook
+  1.0.3 Beta`.** The published CI asset was a genuine 1.0.4 build (verified
+  by fresh download: `uci` → `id name FroostRook 1.0.4 Beta`), but the
+  repository-local artifacts were the pre-1.0.4 binary, so any test run or
+  manual zip made from the tree measured the wrong engine. The release
+  assets are now rebuilt from the tag.
+- **Front-end/docs identity drift.** `uci.js`, `play.js`, `docs/UCI.md`,
+  `docs/BUILD.md`, `docs/TESTING.md` header, `assets/README.md`,
+  `test/uci-smoke.js`, `test/elo.js`, `.github/workflows/build.yml`
+  (release title) and `README.md` still announced FroostRook 1.0.3 Beta.
+  All updated to FroostRook 1.0.4 Beta; CI release title is
+  "FroostRook 1.0.4 Beta".
+
+### Engine (all changes measured on this machine, `wac-native.js nodes=100000 300`)
+
+- **Bench at depth 12: 272,589 nodes** (1.0.3 line: 660,264). Per the
+  re-measurement the 1.0.4 search is the strongest fixed-node tactical
+  configuration on record for this engine:
+  | Build | Bench | WAC@100k |
+  | --- | --- | --- |
+  | 1.0.4 as tagged (S1 L1 H1) | 272,589 | 252/300 |
+  | 1.0.4, `KIWA_LMR_HISTORY=0` | 302,304 | 251/300 |
+  | 1.0.3 configuration | 660,264 | 250/300 |
+  | MVV-LVA capture ordering (`KIWA_SEE_ORDER=0`) | 247,029 | 241/300 |
+
+  Singular extensions and late-move pruning remain enabled by default.
+- **`KIWA_LMR_HISTORY` is now an overridable build switch** (`-D`); it was
+  a hardcoded `#define 1` in the 1.0.4 tag. Still defaults to 1 per the
+  re-measurement (one WAC position and ~10% fewer nodes vs compiled out —
+  within noise on WAC).
+- **`KIWA_SEE_ORDER` added** (default 1): the capture-ordering SEE call can
+  now be ablated for measurement. MVV-LVA loses 11 positions (241/300) and
+  is kept off; questionable orderings are not shipped by default.
+- **History push/pop and malus logic unchanged**; perft exact, rules green,
+  book handling unchanged.
+
+No Elo claim is made. Every match remains bullet-time; the fixed-node tactical
+suite is the yardstick. See `docs/TESTING.md` section 14.
+
+## 1.0.4-beta ("FroostRook 1.0.4 Beta") — original 2026-11-13 release [superseded by the same-day re-cut]
+
+Released: 2026-11-13. Tag: `v1.0.4-beta`. Superseded by the re-cut above.
 
 ### Search
 

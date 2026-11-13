@@ -90,7 +90,7 @@ function engineTurn() {
 }
 
 async function main() {
-  console.log('FroostRook 1.0.3 Beta — chess engine with human-move prediction');
+  console.log('FroostRook 1.0.4 Beta — chess engine with human-move prediction');
   console.log(`You are ${humanColor === WHITE ? 'White' : 'Black'}. Engine: ${searchMs}ms/move.`);
   console.log('Type UCI moves (e.g. e2e4, e7e8q). Commands: hint, predict, moves, undo, new, depth N, quit.\n');
 

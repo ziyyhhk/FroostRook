@@ -1074,10 +1074,19 @@ static const int TUNE_DEFAULT[TUNE_PARAM_COUNT] = {
 #ifndef KIWA_LMP
 #define KIWA_LMP 1
 #endif
+#ifndef KIWA_SEE_ORDER
+#define KIWA_SEE_ORDER 1
+#endif
 #ifndef KIWA_RAZOR
 #define KIWA_RAZOR 0
 #endif
+// History-aware LMR. Overridable build switch. The 1.0.3 measurement
+// (+47k nodes, +0 WAC) decided against it; the 1.0.4 re-cut measured it in the
+// singular+LMP configuration at -30k nodes and 252/300 (vs 302k nodes,
+// 251/300 with it off) — within noise on WAC, fewer nodes with it on.
+#ifndef KIWA_LMR_HISTORY
 #define KIWA_LMR_HISTORY 1
+#endif
 static int MOB_MG[7] = { 0, 0, 3, 2, 2, 1, 0 };  // synced from TUNE
 static int MOB_EG[7] = { 0, 0, 3, 2, 3, 1, 0 };  // synced from TUNE
 static const int OUTPOST_N_MG = 25, OUTPOST_N_EG = 15;
@@ -1925,9 +1934,13 @@ static int moveScore(uint32_t mv, uint32_t ttMove, int ply, uint32_t prevMv) {
 
   if (flags & F_CAP) {
     const int victim = board[to] ? typeOf(board[to]) : PAWN;
+#if KIWA_SEE_ORDER
     const int seev = see(mv);
     if (seev >= 0) return (1 << 22) + seev * 16;
     return (1 << 19) + seev;
+#else
+    return (1 << 22) + VAL_MG[victim] * 16 - VAL_MG[typeOf(board[from])];
+#endif
   }
 
   if (mv == (uint32_t)killers[ply * 2]) return 1 << 21;
@@ -2204,7 +2217,7 @@ static int negamax(int depth, int alpha, int beta, int ply, bool canNull, uint32
       if (depth >= 3 && legal >= 4 && !promo && !inCheck && !givesCheck) {
         if (!(flags & F_CAP)) {
           reduction = LMR[depth][legal];
-#ifdef KIWA_LMR_HISTORY
+#if KIWA_LMR_HISTORY
           // Trust history: search moves that have scored well closer to full
           // depth, and barely-tried or losing-history moves shallower.
           const int hs = history[lmrHi];
