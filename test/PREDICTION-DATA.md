@@ -1,5 +1,22 @@
 # Human-move prediction: data, priors, and the accuracy harness (Goal C groundwork)
 
+> **2026-11-14 addendum (FroostRook 1.0.5 Beta).** The corpus was re-fetched
+> at `max=300` per account and the pipeline re-run: **2,213 games / 147,558
+> plies** (train 1,659 games / 109,304 plies; eval 554 games / 38,254 plies —
+> the same deterministic FNV-1a split, so every old eval game id is still in
+> eval, and the absolute split sizes changed). The retrained prior table has
+> **50,693 positions / 52,760 rows** (from 19,977 / 20,737); eval-plies with a
+> table hit went 9.6% → 11.0% (4,211). Held-out EVAL for the table+backoff
+> predictor: top-1 **22.76%** (from 22.35% on the new split / 23.24% on the
+> old split), top-3 **45.28%**, top-5 **56.01%**, log-loss **2.97**. The
+> walls in sections 1–4 below describe the 2026-10-31 run (876 games / 231
+> eval); its numbers are not directly comparable with the 1.0.5 measurements
+> because the eval set itself grew 2.4x. The blend re-fit (`fit-predict.js`)
+> wrote `{searchWeight:1.6, priorWeight:40, temperature:200}` (the old fit
+> grid's temperature ceiling was raised; see `test/fit-predict.js`). Engine
+> search is unchanged, so the engine-d4 and uniform baselines are re-run
+> unchanged against the larger eval split.
+
 This is the measurement half of the human-move work. It contains **no prediction model** —
 it contains licensed data, a derived prior table, and a harness that can score any
 predictor on a held-out split. `engine.js`, `uci.js`, `book.js` and `native/kiwa.cpp`

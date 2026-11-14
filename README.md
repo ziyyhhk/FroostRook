@@ -1,18 +1,66 @@
-# FroostRook 1.0.4 Beta
+# FroostRook 1.0.5 Beta
 
-<img src="assets/engine-icon.png" alt="FroostRook 1.0.4 Beta" width="200" align="right">
+<img src="assets/engine-icon.png" alt="FroostRook 1.0.5 Beta" width="200" align="right">
 
-FroostRook 1.0.4 Beta is a from-scratch chess engine: a C++17 search core with a
-handcrafted evaluator, a Node.js front-end, an embedded opening repertoire, a
-human-move predictor and a PGN analysis tool. It plays the standard game,
+FroostRook 1.0.5 Beta is a from-scratch chess engine: a C++17 search core with a
+handcrafted evaluator, a Node.js front-end, an embedded opening repertoire
+(expanded with CC0 game-frequency statistics), a human-move predictor retrained on
+an expanded corpus, and a PGN analysis tool. It plays the standard game,
 speaks UCI, and ships as a single static Windows executable.
 
 This is the repository formerly named `ziyyhhk/kiwa-engine`. GitHub redirects
 the old URL and keeps the history, tags and releases.
 
-> **Name and version:** the public engine name is exactly **FroostRook 1.0.4 Beta**
-> (capital F, R and B). `1.0.4-beta` is the package version used in archives.
-> The UCI handshake returns `id name FroostRook 1.0.4 Beta`.
+> **Name and version:** the public engine name is exactly **FroostRook 1.0.5 Beta**
+> (capital F, R and B). `1.0.5-beta` is the package version used in archives.
+> The UCI handshake returns `id name FroostRook 1.0.5 Beta`.
+
+## 1.0.5-beta (2026-11-14)
+
+A book-and-predictor release with a byte-identical playing core. The
+strength of the search is exactly what 1.0.4 Beta shipped (bench 272,589
+nodes at depth 12; WAC 252/300 at fixed 100k nodes — the strongest
+fixed-node tactical result on record here; no Elo claim). What grew is
+the repertoire the engine actually plays and the human-move prior behind
+its `predict`; every search/eval experiment measured this cycle is
+recorded in [docs/TESTING.md](docs/TESTING.md) section 15 and nothing that
+measured worse shipped.
+
+- **Opening book expanded with CC0 game-frequency statistics.** Named
+  theory is untouched (the 1.0.4 named-line reweight is preserved
+  byte-for-byte); the expansion adds moves seen at least 60 times per move
+  in positions the CC0 elite-game statistics (≥120 games in the position,
+  expected score ≥ 0.42 for the side to move) cover **but the named book
+  has nothing for** — deepening the book into uncatalogued lines instead of
+  diluting the curated repertoire. The book grew from 5,580 to **5,686
+  positions** (8,134 → **8,263 moves**, +129 moves in 106 previously
+  uncatalogued positions). The openings suite stays green on all seven
+  personalities (140 book games, 728 book plies; no personality median
+  depth drop), `test/book-check.js` passes, and the named book is
+  bit-identical to 1.0.4's when the gap-fill step is skipped.
+- **Human-move predictor retrained on 2.4x more data.** The training
+  corpus grew from 876 to **2,213 CC0 Lichess games** (147,558 plies; same
+  deterministic FNV-1a train/eval split, same provenance). The prior table
+  grew to **50,693 positions / 52,760 move rows** (from ~20k positions).
+  Held-out EVAL split: top-1 **22.76%** (from 22.35%), top-3 **45.28%**
+  (from 44.71%), top-5 **56.01%** (from 55.47%), mean log-loss **2.97**
+  (from 2.99). The blend re-fit stays search-dominant (1.6 search / 40
+  prior) and recalibrates temperature to **200** after the fit grid's
+  temperature cap was found to clip log-loss improvement.
+- **Measured-and-rejected this cycle (kept behind build switches,
+  default OFF):** quiet-move history pruning (`KIWA_HISTORY_PRUNE=1`,
+  WAC 250/300 vs 252/300); K+Q/K+R mop-up endgame term
+  (`KIWA_MOPUP=1`, WAC 251/300 — flips endgame king moves like WAC #41);
+  reverse-futility depth 3 (248/300) and qsearch TT-move ordering
+  (251/300, no node win) — both reverted.
+- **LTO rejected on this toolchain.** `-flto` produced an incorrect binary
+  here (perft 4,866,525 vs verified 4,865,609; depth-2 search reporting a
+  bogus `mate -500`). The release build keeps the 1.0.4 portable flags
+  unchanged; `-funroll-loops` / `-fno-math-errno` were also measured and
+  showed no NPS gain (within run-to-run noise).
+- **Release identity:** `id name FroostRook 1.0.5 Beta`, `app.rc` 1.0.5.0
+  (FILEVERSION 1,0,5,0), package.json `1.0.5-beta`, and the front-end,
+  docs, workflow, README and UCI smoke test all updated to match.
 
 ## 1.0.4-beta re-cut (2026-11-13, overwriting the 1.0.4-beta assets)
 
@@ -59,6 +107,7 @@ remains bullet-time. Assets were re-verified by fresh download.
 ## Contents
 
 - [Quick start](#quick-start)
+- [1.0.5-beta (2026-11-14)](#105-beta-2026-11-14)
 - [1.0.4-beta re-cut (2026-11-13)](#104-beta-re-cut-2026-11-13-overwriting-the-104-beta-assets)
 - [What changed in 1.0.4 Beta](#what-changed-in-104-beta)
 - [1.0.3-beta re-issue (2026-11-12)](#103-beta-re-issue-2026-11-12)
@@ -330,6 +379,7 @@ where wall-clock time was not recorded:
 | FroostRook 1.0.2-beta | 573,342 | not recorded | 0.719 M | not recorded |
 | FroostRook 1.0.3-beta | 660,264 | not recorded | parity with 1.0.2 on the same loaded machine | not recorded |
 | FroostRook 1.0.3-beta | 660,264 | not recorded | parity with 1.0.3 on the same machine | not recorded |
+| FroostRook 1.0.4-beta = **1.0.5-beta** (identical search tree) | 272,589 | ~1.0–1.4 s (this machine) | ~0.27 M | ~0.28 M |
 
 Against 2.3.0 the patch visits 16.6% fewer nodes and reaches the same depth
 11.5% sooner, while raw wall NPS is 5.7% lower. Against 1.0.0-beta it visits
@@ -567,6 +617,6 @@ The CI workflow builds the portable binary and runs the same set on
 | WAC test positions | [jdart1/arasan-chess `tests/wacnew.epd`](https://github.com/jdart1/arasan-chess/blob/master/tests/wacnew.epd) | BSD-style (Arasan repository); test fixture only |
 | Opening book lines | [lichess-org/chess-openings](https://github.com/lichess-org/chess-openings) TSVs `a`–`e` | CC0 1.0 |
 | Curated gambits and traps | `book-data/traps.tsv`, written for this project | this project |
-| Human games for the predictor | public Lichess exports, 876 games / 55,824 plies, game ids recorded in `test/data/human-games.meta.json` | CC0 1.0 |
+| Human games for the predictor | public Lichess exports, 2,213 games / 147,558 plies, game ids recorded in `test/data/human-games.meta.json` | CC0 1.0 |
 | NNUE prototype data | derived from the same CC0 game set, split by game | CC0 1.0 |
 | Stockfish | separate binary, not vendored or redistributed | GPL-3.0 (upstream) |

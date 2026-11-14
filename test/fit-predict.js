@@ -122,7 +122,7 @@ function score(rows, p) {
 
   const grid = [];
   for (const priorWeight of [0, 40, 80, 120, 180, 250, 350, 500])
-    for (const temperature of [12, 20, 30, 45, 70, 110])
+    for (const temperature of [12, 20, 30, 45, 70, 110, 150, 200])
       for (const searchWeight of [0.6, 1, 1.6])
         grid.push({ searchWeight, priorWeight, temperature });
 

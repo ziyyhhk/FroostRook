@@ -1,4 +1,4 @@
-# FroostRook 1.0.4 Beta — test and measurement report
+# FroostRook 1.0.5 Beta — test and measurement report
 
 This is the full record behind the numbers in `README.md`. It covers what was
 tested, how, on what hardware, and what the results do **not** prove. Every
@@ -740,3 +740,106 @@ This section documents the audit that produced the same-day re-cut of
 - The `v1.0.4-beta` tag was moved to the re-cut commit; CI rebuilt and
   re-uploaded the release assets (`--clobber`); the release notes were
   updated to say what the re-cut is.
+
+## 15. FroostRook 1.0.5-beta measurements (2026-11-14)
+
+This cycle attacked (a) repertoire coverage, (b) the predictor's training
+data, and (c) the compiler/flag space for a free node-rate win. The search
+tree is unchanged; everything that measured worse stayed out.
+
+### Baseline re-established before any change
+
+- Portable build from the tagged 1.0.4 source: bench **272,589** nodes at
+  depth 12 (identical to the 1.0.4 re-cut), `perft 5` = **4,865,609**
+  (exact).
+- `test/wac-native.js nodes=100000 300`: **252/300**, reproducing the
+  1.0.4 re-cut exactly on this machine.
+- Full opening suite green on the shipped book (20 games x 6 plies, 7
+  personalities): 140 book games, 728 book plies, all medians above floor.
+
+### Search and evaluation candidates (all rejected)
+
+- **Reverse futility at depth 3** (margin 120 cp/depth, unchanged from
+  depths 1-2): bench 272,532; WAC **248/300** (-4). Reverted.
+- **Quiet-move history pruning** (`KIWA_HISTORY_PRUNE=1`, quiet moves with
+  history < -700*depth skipped at depth <= 4): WAC **250/300** (-2 vs
+  baseline). Kept behind the switch, default OFF.
+- **K+Q/K+R mop-up endgame term** (`KIWA_MOPUP=1`, no pawns on the board,
+  one side bare-kinged, bonus for loser-king-on-rim and winner-king
+  proximity): WAC **251/300** (-1), the extra miss being WAC #41
+  (endgame king move). Kept behind the switch, default OFF.
+- **Common config (both switches):** WAC **248/300**.
+- **Qsearch TT-move ordering** (thread the node's TT move into qsearch
+  moveScore instead of 0): bench 272,540 (no node win), WAC **251/300**.
+  Reverted.
+- Build flags: **-flto produced an incorrect binary** (perft 4,866,525;
+  depth-2 node 88 with a bogus `mate -500`). Not shipped; the release
+  keeps the 1.0.4 portable flags exactly. **-funroll-loops** and
+  **-fno-math-errno** measured NPS within run-to-run noise (~0.27 M CPU
+  NPS at bench); not adopted.
+
+### Opening book expansion (shipped)
+
+- Regenerated the named book from the same `book-data/*.tsv`; the
+  fingerprint of the pipeline drifted from the shipped artifact (the
+  `test/gen-book.js` template lost the 1.0.4 memory-decay fix during a
+  rename sweep). Template resynced to the shipped semantics; the
+  regeneration is now **byte-identical** to the 1.0.4 `book.js` when no
+  stats are applied. Header comment resynced the same way.
+- `tools/nnue/merge-book.js` gained `--gap-fill-only`: apply the same
+  named-frequency boost as 1.0.4 (1,269 rows, positions unchanged) and add
+  stats moves ONLY in positions the named book does not cover. This fixes
+  the positional-depth failure mode of the rejected full merge by
+  construction: curated positions are never touched; new positions can
+  only deepen the book.
+- Built from `.build/opening-stats.json` (~73k qualifying elite CC0
+  Lichess games, position totals >= 120; moves >= 60 occurrences; expected
+  score for the side to move >= 0.42): **+129 moves in 106 previously
+  uncatalogued positions**; named weights bit-identical to 1.0.4.
+  Book: **5,580 -> 5,686 positions, 8,134 -> 8,263 moves** (587 KB JS).
+- Verified green: `test/book-check.js`, `test/openings-native.js 20 6`
+  (7 personalities, all book-depth medians >= floor, distinct lines
+  10-13 per personality), `native/book_data.h` regenerated (518 KB) and the
+  native engine rebuilt; bench unchanged (272,589 nodes; book never affects
+  search).
+
+### Predictor retrain (shipped)
+
+- Corpus: human games for the same 8 accounts re-downloaded at max=300
+  each (same etiquette: one request per account, >=5s apart, descriptive
+  User-Agent). **876 -> 2,213 games**, 55,824 -> **147,558 plies**;
+  split unchanged (FNV-1a hash32, 25% eval): train 1,659 / eval 554 games
+  (109,304 / 38,254 plies). Provenance updated in
+  `test/data/human-games.meta.json` (`reparsedAt`; the original
+  `fetchDate` is preserved across re-parses by design).
+- Prior table retrained: **50,693 positions / 52,760 rows** (from ~19,977
+  positions), `data/human-priors.json` 5.0 MB.
+- EVAL split, before -> after: top-1 **22.35% -> 22.76%**, top-3
+  **44.71% -> 45.28%**, top-5 **55.47% -> 56.01%**, mean log-loss
+  **2.99 -> 2.97**; eval-plies backed by a table hit 9.6% -> 11.0%
+  (4,211 / 38,254). Engine-d4 and uniform baselines unchanged (search and
+  learner are the JS engine's, unchanged).
+- Blend re-fit (`node test/fit-predict.js 800`, 795 scored positions,
+  leave-one-out): `{"searchWeight":1.6,"priorWeight":40,"temperature":200}`;
+  train top-1 39.4% (search-only reference 33.3%). The fit grid's
+  temperature ceiling (110) was found to clip log-loss improvement; the
+  grid was extended to include 150/200 (train LL 3.01 at T=110 against
+  2.82 at T=200 on the same fitted blend). Eval A/B (1,200 hash-sampled
+  eval plies, this document's BASE/NEW comparison): candidate vectors all
+  landed within ~1pp top-1 of each other; the shipped vector is not worse
+  than the 1.0.4 ship on any eval metric; its higher temperature is
+  strictly better-calibrated on both train and eval.
+- `test/predict-accuracy.js` re-run against the expanded eval split for
+  both models; `test/predict-shipped.js` sanity pass retained.
+
+### Context kept (unchanged from 1.0.4)
+
+- Shipped search: singular extensions + LMP + history-aware LMR; the
+  1.0.4 fixed-node re-cut (S1 L1 H1) remains the reference.
+- Texel-tuned eval, opposition term, wide NNUE: unchanged, rejected,
+  unintegrated.
+- Full opening-book merge: still rejected for the positional-depth failure
+  it caused before; `--gap-fill-only` structurally avoids it.
+- Release identity bumped: UCI `id name FroostRook 1.0.5 Beta`, package.json
+  1.0.5-beta, `app.rc` 1.0.5.0 (FILEVERSION 1,0,5,0), front-end, docs,
+  workflow, README, UCI smoke.

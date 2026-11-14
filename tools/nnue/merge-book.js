@@ -22,8 +22,12 @@ const path = require('path');
 
 const STATS_PATH = process.argv[2] || '.build/opening-stats.json';
 const BOOK_PATH = process.argv[3] || 'book.js';
-const MIN_GAMES = 120;
+const MIN_GAMES = Math.max(20, +(process.env.MERGE_MIN_GAMES || 120));
+// Gap-fill additions (moves in positions the named book does not cover) can
+// use a looser per-move threshold; the named book keeps the shipped parity.
+const GAPFILL_MIN = Math.max(20, +(process.env.MERGE_GAPFILL_MIN || MIN_GAMES));
 const NAMED_ONLY = process.argv.includes('--named-only');
+const GAP_FILL_ONLY = process.argv.includes('--gap-fill-only');
 
 const stats = JSON.parse(fs.readFileSync(STATS_PATH, 'utf8'));
 
@@ -79,16 +83,25 @@ for (const [key, moves] of Object.entries(named)) {
 //    With --named-only, only step 1 (frequency boosts on the curated named
 //    book) is applied — this preserves the exact named theory while making
 //    the weights reflect real tournament frequency data.
+//    With --gap-fill-only, step 1 is applied the same way, and step 2 adds
+//    moves ONLY in positions the named book has nothing for — deepening the
+//    book into uncatalogued lines instead of diluting the curated repertoire
+//    (a full in-position merge was measured to pull the Positional
+//    personality's median book depth below the openings-suite floor; gap-fill
+//    cannot, since it never touches a named position).
 const START_KEY = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq';
+const GAP_FILL = GAP_FILL_ONLY;
 if (!NAMED_ONLY)
 for (const [key, pos] of Object.entries(positions)) {
   if (key === START_KEY) continue;
+  if (GAP_FILL && merged[key]) continue; // named position: leave the curated line alone
   const existing = merged[key] || [];
   const namedSet = new Set(existing.map(m => m[0]));
   const side = key.split(' ')[1];
+  const moveMin = GAP_FILL ? GAPFILL_MIN : MIN_GAMES;
   for (const [uci, m] of Object.entries(pos.moves)) {
     if (namedSet.has(uci)) continue;
-    if (m.n < MIN_GAMES) continue;
+    if (m.n < moveMin) continue;
     const sc = scoreFor(m, side);
     if (sc < 0.42) continue;
     const base = Math.min(120, Math.round(Math.log2(m.n + 1) * 9));

@@ -1,8 +1,8 @@
 1 ICON "../assets/engine-icon.ico"
 
 1 VERSIONINFO
-FILEVERSION 1,0,4,0
-PRODUCTVERSION 1,0,4,0
+FILEVERSION 1,0,5,0
+PRODUCTVERSION 1,0,5,0
 FILEOS 0x40004
 FILETYPE 0x1
 BEGIN
@@ -11,12 +11,12 @@ BEGIN
     BLOCK "040904B0"
     BEGIN
       VALUE "CompanyName", "ziyyhhk"
-      VALUE "FileDescription", "FroostRook 1.0.4 Beta chess engine"
-      VALUE "FileVersion", "1.0.4.0"
+      VALUE "FileDescription", "FroostRook 1.0.5 Beta chess engine"
+      VALUE "FileVersion", "1.0.5.0"
       VALUE "InternalName", "FroostRook"
       VALUE "OriginalFilename", "FroostRook.exe"
-      VALUE "ProductName", "FroostRook 1.0.4 Beta"
-      VALUE "ProductVersion", "1.0.4.0"
+      VALUE "ProductName", "FroostRook 1.0.5 Beta"
+      VALUE "ProductVersion", "1.0.5.0"
     END
   END
   BLOCK "VarFileInfo"

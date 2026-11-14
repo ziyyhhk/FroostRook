@@ -1074,11 +1074,27 @@ static const int TUNE_DEFAULT[TUNE_PARAM_COUNT] = {
 #ifndef KIWA_LMP
 #define KIWA_LMP 1
 #endif
+// Quiet-move pruning by demonstrated value: at low depth, a quiet move whose
+// history score is strongly negative is skipped outright. LMP prunes by
+// move count; this prunes by what the move has actually done in this game.
+#ifndef KIWA_HISTORY_PRUNE
+#define KIWA_HISTORY_PRUNE 0
+#endif
+#ifndef KIWA_HISTORY_PRUNE_MARGIN
+#define KIWA_HISTORY_PRUNE_MARGIN 700
+#endif
 #ifndef KIWA_SEE_ORDER
 #define KIWA_SEE_ORDER 1
 #endif
 #ifndef KIWA_RAZOR
 #define KIWA_RAZOR 0
+#endif
+// Endgame mop-up: with a queen or rook against a bare king and no pawns for
+// either side, push the eval up when the lone king is on the edge and our own
+// king is close. Converts won endings instead of shuffling; never fires once
+// both sides have material or pawns.
+#ifndef KIWA_MOPUP
+#define KIWA_MOPUP 0
 #endif
 // History-aware LMR. Overridable build switch. The 1.0.3 measurement
 // (+47k nodes, +0 WAC) decided against it; the 1.0.4 re-cut measured it in the
@@ -1646,6 +1662,45 @@ static void extras() {
 #define KIWA_EXTRAS 1
 #endif
 
+// Chebyshev distance of `sq` from the nearest central square d4/e4/d5/e5.
+#if KIWA_MOPUP
+static int distToCenter(int sq) {
+  static const int CENTRE[4] = { 51, 52, 67, 68 };
+  int best = 3;
+  for (int i = 0; i < 4; i++) {
+    const int d = chebDist(sq, CENTRE[i]);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+static int sideMaterial(int c) {
+  return pieceCount[pieceIndex(c, QUEEN)] * 900 + pieceCount[pieceIndex(c, ROOK)] * 500
+       + pieceCount[pieceIndex(c, BISHOP)] * 330 + pieceCount[pieceIndex(c, KNIGHT)] * 320;
+}
+
+// Mop-up: a lone king against queen or rook with no pawns anywhere is a won
+// ending that shallow search sometimes shuffles away. Reward the lone king
+// being driven to the edge and our own king standing close. Only ever fires
+// when one side has no pieces at all and no pawns exist, so it cannot mask a
+// real tactic. Measured on WAC (fixed 100k nodes): the approach term flipped
+// #41 (expected Ka5, played Kc5) - the default build keeps it OFF
+// (KIWA_MOPUP=0); enable with -DKIWA_MOPUP=1 to re-measure.
+static int mopUpTerm() {
+  if (pieceCount[pieceIndex(WHITE, PAWN)] != 0 || pieceCount[pieceIndex(BLACK, PAWN)] != 0) return 0;
+  const int wMat = sideMaterial(WHITE), bMat = sideMaterial(BLACK);
+  int sign;
+  if (bMat == 0 && wMat >= 500) sign = 1;
+  else if (wMat == 0 && bMat >= 500) sign = -1;
+  else return 0;
+  const int loserKing = sign > 0 ? kingSq[BLACK] : kingSq[WHITE];
+  const int winnerKing = sign > 0 ? kingSq[WHITE] : kingSq[BLACK];
+  const int toEdge = distToCenter(loserKing);   // 0 central, 3 in the corner
+  const int kd = chebDist(winnerKing, loserKing);
+  return sign * (toEdge * 45 + (7 - kd) * 25);
+}
+#endif
+
 static int evaluate() {
   if (nnueLoaded && nnueEnabled.load(memory_order_relaxed)) {
     // FRNN nets were trained on Stockfish PV1 evals (which include tempo),
@@ -1657,6 +1712,9 @@ static int evaluate() {
 #if KIWA_EXTRAS
   extras();
   s += (extraMg * p + extraEg * (24 - p)) / 24;
+#endif
+#if KIWA_MOPUP
+  if (phase <= 8) s += mopUpTerm();
 #endif
   return (side == WHITE ? s : -s) + TUNE[P_TEMPO];
 }
@@ -2194,6 +2252,17 @@ static int negamax(int depth, int alpha, int beta, int ply, bool canNull, uint32
     if (excludedMove == 0 && !inCheck && depth <= 4 && legal > 1 && !(flags & F_CAP) && !promo && !givesCheck) {
       const int lmpLimit = improving ? (3 + depth * depth) : (2 + depth);
       if (legal > lmpLimit) { unmakeMove(mv); continue; }
+    }
+#endif
+#if KIWA_HISTORY_PRUNE
+    // Prune by demonstrated value: a quiet move whose history score is
+    // strongly negative at this node's depth is skipped, even inside the
+    // LMP allowance. Captures and checking moves are never pruned.
+    if (excludedMove == 0 && !inCheck && depth <= 4 && legal > 1 &&
+        !(flags & F_CAP) && !promo && !givesCheck &&
+        history[us * 16384 + lmrFrom * 128 + lmrTo] < -KIWA_HISTORY_PRUNE_MARGIN * depth) {
+      unmakeMove(mv);
+      continue;
     }
 #endif
     if (!(flags & F_CAP) && !promo && nQuiet < 64) {
@@ -3214,7 +3283,7 @@ int main(int argc, char** argv) {
     if (cmd.empty()) continue;
 
     if (cmd == "uci") {
-      emitInfo("id name FroostRook 1.0.4 Beta");
+      emitInfo("id name FroostRook 1.0.5 Beta");
       emitInfo("id author ziyyhhk");
       emitInfo("id string core C++ native");
       emitInfo("option name Threads type spin default 1 min 1 max 8");

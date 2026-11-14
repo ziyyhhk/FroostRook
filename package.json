@@ -1,8 +1,8 @@
 {
   "name": "froostrook",
-  "version": "1.0.4-beta",
+  "version": "1.0.5-beta",
   "private": true,
-  "description": "FroostRook 1.0.4 Beta: from-scratch chess engine with C++17 search core, JavaScript front-end, opening personalities, human move prediction and PGN analysis. Search improvements: singular extensions, late-move pruning, history-aware LMR.",
+  "description": "FroostRook 1.0.5 Beta: from-scratch chess engine with C++17 search core (singular extensions, late-move pruning, history-aware LMR), JavaScript front-end, opening personalities, an opening book expanded with CC0 game-frequency statistics, and a human-move predictor retrained on an expanded corpus.",
   "scripts": {
     "play": "node play.js",
     "uci": "node uci.js",

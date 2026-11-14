@@ -2,6 +2,74 @@
 
 All notable changes to FroostRook are documented here.
 
+## 1.0.5-beta ("FroostRook 1.0.5 Beta")
+
+Released: 2026-11-14. Tag: `v1.0.5-beta`.
+
+Repertoire and predictor release on a byte-identical search core. The
+strength of the playing engine is exactly what 1.0.4 Beta shipped: bench
+**272,589** nodes at depth 12 and WAC **252/300** at fixed 100k nodes.
+No Elo claim. Everything measured this cycle that did not improve is
+listed; details and raw numbers in `docs/TESTING.md` section 15.
+
+### Opening book expanded (shipped)
+
+- Named theory and the 1.0.4 named-line reweight are preserved
+  byte-for-byte (the book generator template was resynced to the shipped
+  semantics after a rename drift had broken it; regeneration is now
+  byte-identical when no stats are applied).
+- **+129 moves in 106 previously uncatalogued positions** from the CC0
+  elite-game statistics (moves with >= 60 occurrences per move in
+  positions with >= 120 analysed games; expected score for the side to
+  move >= 0.42). Applied as `--gap-fill-only` to
+  `tools/nnue/merge-book.js`: named positions are never touched, so the
+  Positional-depth failure mode of the rejected 1.1.0-era full merge
+  cannot recur. The book grew from 5,580 to **5,686 positions**
+  (8,134 → **8,263 moves**). The openings suite stays green (all 7
+  personalities, 140 book games / 728 book plies) and
+  `test/book-check.js` passes; `native/book_data.h` regenerated and the
+  native engine rebuilt.
+
+### Predictor retrained on an expanded corpus (shipped)
+
+- Training corpus: **876 → 2,213 CC0 Lichess games** (147,558 plies;
+  1,659 train / 554 eval; same FNV-1a split, same provenance, requests
+  re-fetched with the same etiquette). Prior table: **50,693 positions /
+  52,760 rows** (from ~19,977 positions).
+- Held-out EVAL split: top-1 **22.35% → 22.76%**, top-3
+  **44.71% → 45.28%**, top-5 **55.47% → 56.01%**, log-loss
+  **2.99 → 2.97**; table coverage of eval plies 9.6% → 11.0% (4,211).
+- Blend re-fit (`node test/fit-predict.js 800`, leave-one-out on train):
+  `{"searchWeight":1.6,"priorWeight":40,"temperature":200}`. The fit
+  grid's temperature ceiling was found to clip log-loss improvement, so
+  the grid was extended to 150/200 (train log-loss 3.01 at T=110 against
+  2.82 at T=200). Eval A/B on 1,200 hash-sampled plies shows the new
+  vector is not worse than the 1.0.4 ship on any metric.
+- `test/predict-accuracy.js` re-run for both models; the gap-fill book
+  and the retrained prior compose without conflict.
+
+### Strength/speed candidates measured and rejected (not shipped)
+
+- Reverse futility extended to depth 3: **248/300** (vs 252/300).
+- Quiet-move history pruning (`KIWA_HISTORY_PRUNE=1`): **250/300**. Kept
+  behind a build switch; default OFF.
+- K+Q/K+R mop-up endgame term (`KIWA_MOPUP=1`): **251/300** (flips WAC
+  #41). Kept behind a build switch; default OFF.
+- Qsearch TT-move ordering: bench 272,540 (no node win), **251/300**.
+  Reverted.
+- `-flto` build: produced an **incorrect binary** (perft 4,866,525 vs
+  verified 4,865,609; bogus `mate -500` at depth 2). The release uses
+  the 1.0.4 portable flags unchanged. `-funroll-loops` /
+  `-fno-math-errno`: NPS within run-to-run noise; not adopted.
+
+### Release identity
+
+- UCI `id name FroostRook 1.0.5 Beta`; `app.rc` 1.0.5.0
+  (FILEVERSION 1,0,5,0); `package.json` 1.0.5-beta; front-end, docs,
+  workflow (release title), README, UCI smoke test and
+  `test/elo.js` all updated to match. CI builds the portable generic
+  x86-64 asset only.
+
 ## 1.0.4-beta re-cut ("FroostRook 1.0.4 Beta", same tag `v1.0.4-beta`)
 
 Released: 2026-11-13 (overwriting the 2026-11-13 04:47 UTC `v1.0.4-beta` artifacts). Tag: `v1.0.4-beta` (moved).

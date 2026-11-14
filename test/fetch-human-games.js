@@ -51,14 +51,14 @@ const REQUEST_TIMEOUT_MS = 90000;
 // account below is a public Lichess player; elo shown is the rating observed in
 // the games that were exported (see `observedElo` in the meta file).
 const ACCOUNTS = [
-  { username: 'german11', max: 150, why: 'low-rated amateur (~1100 blitz), very active, casual style' },
-  { username: 'aalex2025', max: 120, why: 'amateur (~1250 blitz)' },
-  { username: 'challenger555', max: 120, why: 'amateur (~1300-1500 blitz)' },
-  { username: 'Ayaan-07', max: 120, why: 'amateur (~1400-1600 blitz)' },
-  { username: 'khaire_Mourad', max: 120, why: 'amateur (~1500 blitz)' },
-  { username: 'Yansoon', max: 120, why: 'club level (~1550-1650 blitz)' },
-  { username: 'Bondar_Evgeniy', max: 120, why: 'strong club (~1750-1800 blitz)' },
-  { username: 'penguingm1', max: 120, why: 'titled master (GM/2500+), sharp modern opening repertoire' },
+  { username: 'german11', max: 300, why: 'low-rated amateur (~1100 blitz), very active, casual style' },
+  { username: 'aalex2025', max: 300, why: 'amateur (~1250 blitz)' },
+  { username: 'challenger555', max: 300, why: 'amateur (~1300-1500 blitz)' },
+  { username: 'Ayaan-07', max: 300, why: 'amateur (~1400-1600 blitz)' },
+  { username: 'khaire_Mourad', max: 300, why: 'amateur (~1500 blitz)' },
+  { username: 'Yansoon', max: 300, why: 'club level (~1550-1650 blitz)' },
+  { username: 'Bondar_Evgeniy', max: 300, why: 'strong club (~1750-1800 blitz)' },
+  { username: 'penguingm1', max: 300, why: 'titled master (GM/2500+), sharp modern opening repertoire' },
 ];
 
 // --- fetching ---------------------------------------------------------------

@@ -1,21 +1,21 @@
 {
-  "searchWeight": 1,
+  "searchWeight": 1.6,
   "priorWeight": 40,
-  "temperature": 70,
+  "temperature": 200,
   "alpha": 0.5,
   "backoffK": 4,
   "fitted": {
-    "positions": 298,
-    "tableHits": 298,
-    "trainGames": 645,
+    "positions": 795,
+    "tableHits": 794,
+    "trainGames": 1659,
     "plyCap": 40,
     "depth": 4,
     "msPerPosition": 400,
     "threshold": 0.02,
-    "trainTop1": 46.31,
-    "trainLogLoss": 2.2563,
-    "searchOnlyTop1": 38.93
+    "trainTop1": 39.37,
+    "trainLogLoss": 2.8227,
+    "searchOnlyTop1": 33.33
   },
   "note": "Fitted on the TRAIN split of the CC0 Lichess set only. test/predict-accuracy.js measures the held-out EVAL split.",
-  "fittedAt": "2026-10-31T14:59:59.624Z"
+  "fittedAt": "2026-11-14T04:16:30.607Z"
 }

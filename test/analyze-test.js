@@ -118,6 +118,51 @@ const SPECIAL_UCIS = [
   'd7d8q',
 ];
 
+// A complete real CC0 Lichess game (game/aclZU7p3, 41 moves, Standard) as
+// the first game, plus a second short real game (game/ecAs0w6o) so the
+// multi-game selection still has work to do. Embedded so this suite does
+// not depend on the ever-changing training corpus files.
+const REAL_GAME_PGN = `[Event "Hourly SuperBlitz Arena"]
+[Site "https://lichess.org/game/aclZU7p3"]
+[Date "2026.11.06"]
+[Round "-"]
+[White "AbhishekManiyar4444"]
+[Black "Ayaan-07"]
+[Result "1/2-1/2"]
+[GameId "aclZU7p3"]
+[UTCDate "2026.11.06"]
+[UTCTime "16:10:18"]
+[WhiteElo "1503"]
+[BlackElo "1191"]
+[WhiteRatingDiff "-4"]
+[BlackRatingDiff "+5"]
+[Variant "Standard"]
+[TimeControl "180+0"]
+[Termination "Time forfeit"]
+
+1. d4 e5 2. dxe5 Nc6 3. Nf3 f6 4. exf6 Nxf6 5. Bg5 Bc5 6. e3 d5 7. Bd3 Be6 8. Nbd2 Qe7 9. O-O O-O-O 10. c3 h6 11. Bh4 g5 12. Bg3 Kb8 13. b4 Bd6 14. a4 Ne4 15. Qc2 Nxd2 16. Nxd2 Bxg3 17. hxg3 h5 18. b5 Ne5 19. a5 h4 20. b6 cxb6 21. axb6 a6 22. Bxa6 bxa6 23. Rxa6 Qb7 24. Rfa1 Kc8 25. c4 Rd7 26. cxd5+ Nc6 27. dxc6 Qxc6 28. Qxc6+ Kd8 29. Ra8+ Ke7 30. b7 Rxb7 31. Qxb7+ Kf6 32. Rxh8 Ke5 33. Qc6 Kf5 34. Qxe6+ Kxe6 35. gxh4 Kd6 36. hxg5 Ke6 37. f3 Kf5 38. g6 Kxg6 39. f4 Kf6 40. Re8 Kg6 41. Rd8 Kf6 1/2-1/2
+
+[Event "Daily SuperBlitz Arena"]
+[Site "https://lichess.org/game/ecAs0w6o"]
+[Date "2026.11.12"]
+[Round "-"]
+[White "J_AlvarezE"]
+[Black "Ayaan-07"]
+[Result "1-0"]
+[GameId "ecAs0w6o"]
+[UTCDate "2026.11.12"]
+[UTCTime "17:01:09"]
+[WhiteElo "1420"]
+[BlackElo "1214"]
+[WhiteRatingDiff "+3"]
+[BlackRatingDiff "-4"]
+[Variant "Standard"]
+[TimeControl "180+0"]
+[Termination "Time forfeit"]
+
+1. f4 e5 2. Nf3 exf4 3. d4 d5 4. Bxf4 Bf5 5. Nc3 Nf6 6. e3 Nc6 7. Bd3 Bd6 8. Bxd6 Bxd3 9. Qxd3 Qxd6 10. O-O Ng4 11. Nb5 Qd8 12. Ne5 1-0
+`;
+
 const THREEFOLD_PGN = `[Event "Synthetic threefold"]
 [Site "local"]
 [Date "2026.11.01"]
@@ -279,10 +324,9 @@ async function testSpecialMoves() {
 }
 
 async function testRealGame() {
-  const pgn = path.join(ROOT, 'test', 'human-games', 'Ayaan-07.pgn');
-  if (!check('real game: PGN fixture exists', fs.existsSync(pgn), pgn)) return;
+  const pgn = writeTemp('real-game.pgn', REAL_GAME_PGN);
 
-  // Parse-only assertion: this file has many games.
+  // Parse-only assertion: the embedded fixture has two games.
   const A = require(ANALYZE);
   let parsed;
   try {
@@ -320,7 +364,7 @@ async function testRealGame() {
   const game = doc.games[0];
   check('real game: only --game 1 selected', doc.games.length === 1);
   check('real game: tags preserved',
-    game.tags.White === 'greg_st' && game.tags.Black === 'Ayaan-07',
+    game.tags.White === 'AbhishekManiyar4444' && game.tags.Black === 'Ayaan-07',
     `${game.tags.White} vs ${game.tags.Black}`);
   check('real game: full game was parsed', game.moves.length > 50, `moves=${game.moves.length}`);
   const analyzed = game.moves.filter((m) => m.analyzed);
